@@ -79,7 +79,7 @@ export async function readChatMessages(
     `/me/chats/${encodeURIComponent(chatId)}/messages`,
     {
       $top: String(top),
-      $orderby: "createdDateTime asc",
+      $orderby: "createdDateTime desc",
     }
   );
 
@@ -94,7 +94,8 @@ export async function readChatMessages(
       body: stripHtml(msg.body.content),
       createdAt: msg.createdDateTime,
       messageType: msg.messageType,
-    }));
+    }))
+    .reverse();
 }
 
 export async function findChatByParticipant(
