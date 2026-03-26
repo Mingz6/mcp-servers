@@ -118,6 +118,56 @@ export async function getMyProfile(): Promise<{
   return graphFetch("/me", { $select: "displayName,mail" });
 }
 
+// --- PR Extraction ---
+
+export interface PrLink {
+  owner: string;
+  repo: string;
+  number: number;
+  url: string;
+  postedBy: string;
+  postedAt: string;
+  context: string;
+}
+
+const PR_URL_RE = /https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/g;
+
+export async function extractPrLinks(
+  chatId: string,
+  sinceDate: string,
+  excludeAuthor?: string
+): Promise<PrLink[]> {
+  // Fetch enough messages to cover the time window
+  const messages = await readChatMessages(chatId, 50);
+
+  const cutoff = new Date(sinceDate);
+  const seen = new Set<string>();
+  const results: PrLink[] = [];
+
+  for (const msg of messages) {
+    if (new Date(msg.createdAt) < cutoff) continue;
+    if (excludeAuthor && msg.from.toLowerCase().includes(excludeAuthor.toLowerCase())) continue;
+
+    for (const match of msg.body.matchAll(PR_URL_RE)) {
+      const key = `${match[1]}/${match[2]}#${match[3]}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      results.push({
+        owner: match[1],
+        repo: match[2],
+        number: Number(match[3]),
+        url: match[0],
+        postedBy: msg.from,
+        postedAt: msg.createdAt,
+        context: truncate(msg.body.replace(/\n/g, " "), 200),
+      });
+    }
+  }
+
+  return results;
+}
+
 // --- Helpers ---
 
 function truncate(text: string, max: number): string {

@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
+    extractPrLinks,
     findChatByParticipant,
     getMyProfile,
     listChats,
@@ -146,6 +147,68 @@ server.tool(
             text: `Authenticated as: ${profile.displayName} (${profile.mail})`,
           },
         ],
+      };
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "teams_get_pending_reviews",
+  "Extract GitHub PR links from a Teams chat (e.g., Build Team PRs++) for code review. Filters out your own PRs, deduplicates, and returns structured PR data. Use with a chat ID from teams_find_chat.",
+  {
+    chatId: z
+      .string()
+      .describe("The chat ID to scan for PR links"),
+    since: z
+      .string()
+      .default("today")
+      .describe("Time filter: 'today', an ISO date like '2026-03-26', or 'all' for last 50 messages"),
+    excludeSelf: z
+      .boolean()
+      .default(true)
+      .describe("Exclude PRs posted by the authenticated user (default true)"),
+  },
+  async ({ chatId, since, excludeSelf }) => {
+    try {
+      let sinceDate: string;
+      if (since === "today") {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        sinceDate = today.toISOString();
+      } else if (since === "all") {
+        sinceDate = "2000-01-01T00:00:00Z";
+      } else {
+        sinceDate = new Date(since).toISOString();
+      }
+
+      let excludeAuthor: string | undefined;
+      if (excludeSelf) {
+        const profile = await getMyProfile();
+        excludeAuthor = profile.displayName;
+      }
+
+      const prs = await extractPrLinks(chatId, sinceDate, excludeAuthor);
+
+      if (prs.length === 0) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `No PR links found${since === "today" ? " from today" : ""} (excluding your own).`,
+          }],
+        };
+      }
+
+      const lines = prs.map((pr, i) =>
+        `${i + 1}. **${pr.owner}/${pr.repo}#${pr.number}** — by ${pr.postedBy} (${new Date(pr.postedAt).toLocaleString()})\n   ${pr.url}\n   ${pr.context}`
+      );
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Found ${prs.length} PR(s):\n\n${lines.join("\n\n")}`,
+        }],
       };
     } catch (err) {
       return toolError(err);
