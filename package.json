@@ -1,23 +1,14 @@
 {
-  "name": "mcp-teams-chat",
+  "name": "mcp-servers",
   "version": "1.0.0",
-  "description": "MCP server for reading Microsoft Teams chat messages via Graph API",
-  "type": "module",
-  "main": "dist/index.js",
+  "private": true,
+  "description": "Personal MCP servers monorepo",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "tsc --watch",
-    "auth-test": "node dist/auth-test.js"
-  },
-  "dependencies": {
-    "@azure/msal-node": "^2.16.0",
-    "@modelcontextprotocol/sdk": "^1.12.1",
-    "zod": "^3.24.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
+    "build": "npm run build --workspaces",
+    "build:teams-chat": "npm run build -w packages/teams-chat"
   },
   "engines": {
     "node": ">=18.0.0"
