@@ -6,7 +6,7 @@ Personal MCP servers monorepo. Each server lives in `packages/` and is independe
 
 | Package | What it does |
 |---------|-------------|
-| [teams-chat](packages/teams-chat/) | Read Microsoft Teams chat messages via Graph API |
+| [teams-chat](packages/teams-chat/) | Read, send, and react to Microsoft Teams messages via Graph API. Includes PR link extraction for code review workflows. |
 
 ## Quick Start
 

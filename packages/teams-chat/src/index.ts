@@ -6,7 +6,9 @@ import {
     findChatByParticipant,
     getMyProfile,
     listChats,
+    reactToMessage,
     readChatMessages,
+    sendMessage,
 } from "./graph.js";
 
 const server = new McpServer({
@@ -75,7 +77,7 @@ server.tool(
       const messages = await readChatMessages(chatId, count);
       const lines = messages.map((m) => {
         const date = new Date(m.createdAt).toLocaleString();
-        return `[${date}] ${m.from}: ${m.body}`;
+        return `[${date}] ${m.from} (msgId: ${m.id}): ${m.body}`;
       });
 
       return {
@@ -208,6 +210,62 @@ server.tool(
         content: [{
           type: "text" as const,
           text: `Found ${prs.length} PR(s):\n\n${lines.join("\n\n")}`,
+        }],
+      };
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "teams_react_to_message",
+  "React to a Teams chat message with an emoji (e.g., ✅, ❌, 👍, ❤️). Use teams_read_chat first to get message IDs.",
+  {
+    chatId: z
+      .string()
+      .describe("The chat ID containing the message"),
+    messageId: z
+      .string()
+      .describe("The message ID to react to (from teams_read_chat output)"),
+    emoji: z
+      .string()
+      .default("✅")
+      .describe("The emoji to react with (any unicode emoji, e.g., ✅, ❌, 👍, ❤️)"),
+  },
+  async ({ chatId, messageId, emoji }) => {
+    try {
+      await reactToMessage(chatId, messageId, emoji);
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Reacted with ${emoji} to message ${messageId}.`,
+        }],
+      };
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "teams_send_message",
+  "Send a message to a Teams chat. Use teams_find_chat or teams_list_chats first to get the chat ID.",
+  {
+    chatId: z
+      .string()
+      .describe("The chat ID to send the message to"),
+    content: z
+      .string()
+      .describe("The message content (plain text or HTML)"),
+  },
+  async ({ chatId, content }) => {
+    try {
+      const msgId = await sendMessage(chatId, content);
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Message sent (ID: ${msgId}).`,
         }],
       };
     } catch (err) {

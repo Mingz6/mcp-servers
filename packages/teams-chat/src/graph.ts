@@ -28,6 +28,30 @@ async function graphFetch(
   return response.json();
 }
 
+async function graphPost(
+  path: string,
+  body: Record<string, unknown>
+): Promise<Response> {
+  const token = await getAccessToken();
+  const url = `${GRAPH_BASE}${path}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Graph API ${response.status}: ${text}`);
+  }
+
+  return response;
+}
+
 // --- Types ---
 
 export interface ChatSummary {
@@ -168,6 +192,31 @@ export async function extractPrLinks(
   return results;
 }
 
+// --- Write Operations ---
+
+export async function reactToMessage(
+  chatId: string,
+  messageId: string,
+  emoji: string
+): Promise<void> {
+  await graphPost(
+    `/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/setReaction`,
+    { reactionType: emoji }
+  );
+}
+
+export async function sendMessage(
+  chatId: string,
+  content: string
+): Promise<string> {
+  const response = await graphPost(
+    `/chats/${encodeURIComponent(chatId)}/messages`,
+    { body: { content } }
+  );
+  const data = await response.json();
+  return data.id;
+}
+
 // --- Helpers ---
 
 function truncate(text: string, max: number): string {
@@ -177,6 +226,13 @@ function truncate(text: string, max: number): string {
 function stripHtml(html: string): string {
   return html
     .replace(/<br\s*\/?>/gi, "\n")
+    // Extract href URLs before stripping tags (Teams embeds links in <a> tags)
+    .replace(/<a\s[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/gi, (_, href, text) => {
+      // If the visible text already contains the URL, keep just the text
+      if (text.includes("http")) return text;
+      // Otherwise append the href so it's not lost
+      return `${text} ${href}`;
+    })
     .replace(/<[^>]+>/g, "")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")

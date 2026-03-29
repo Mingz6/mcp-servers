@@ -1,17 +1,18 @@
 # mcp-teams-chat
 
-MCP server that reads your Microsoft Teams chat messages. Uses Microsoft Graph API with device code flow for auth.
-
-**Read-only** — this server can only read chats, never send messages or modify anything.
+MCP server for Microsoft Teams chat — read messages, send replies, react to messages, and extract PR links for code review workflows. Uses Microsoft Graph API with device code flow for auth.
 
 ## Tools
 
 | Tool | What it does |
 |------|-------------|
 | `teams_list_chats` | List recent chats with participant names and last message preview |
-| `teams_find_chat` | Find a chat by person name or topic |
-| `teams_read_chat` | Read messages from a specific chat (by ID) |
-| `teams_whoami` | Check who you're authenticated as |
+| `teams_find_chat` | Find a chat by participant name or chat topic |
+| `teams_read_chat` | Read messages from a specific chat (includes message IDs for reactions) |
+| `teams_whoami` | Check the currently authenticated user |
+| `teams_get_pending_reviews` | Extract GitHub PR links from a chat (e.g., "Build Team PRs++"), filter out your own, deduplicate |
+| `teams_react_to_message` | React to a message with any emoji (✅, ❌, 👍, etc.) |
+| `teams_send_message` | Send a message to a chat |
 
 ## Setup
 
@@ -32,9 +33,10 @@ MCP server that reads your Microsoft Teams chat messages. Uses Microsoft Graph A
 1. In your app registration, go to **API permissions**
 2. Click **Add a permission** → **Microsoft Graph** → **Delegated permissions**
 3. Add these:
-   - `Chat.Read`
-   - `User.Read`
-4. Click **Grant admin consent** if you have admin access. If not, you'll be prompted to consent on first login — your tenant admin may need to approve `Chat.Read`.
+   - `Chat.ReadWrite` (read chats + send messages)
+   - `ChatMessage.Send` (send messages)
+   - `User.Read` (identify the authenticated user)
+4. Click **Grant admin consent** if you have admin access. If not, you'll be prompted to consent on first login — your tenant admin may need to approve the permissions.
 
 ### 3. Configure Environment
 
@@ -89,6 +91,9 @@ Once connected, Copilot can call these tools directly:
 - "Read my recent Teams chats" → `teams_list_chats`
 - "Find my chat with Kelsey" → `teams_find_chat` → `teams_read_chat`
 - "What did Chris say in our last conversation?" → `teams_find_chat` → `teams_read_chat`
+- "Any PRs to review?" → `teams_find_chat` → `teams_get_pending_reviews`
+- "React ✅ to that message" → `teams_react_to_message`
+- "Send a message in that chat" → `teams_send_message`
 
 ## Troubleshooting
 
@@ -105,9 +110,15 @@ rm ~/.mcp-teams-chat/token-cache.json
 npm run auth-test
 ```
 
+**MCP server hangs on startup (no output)**
+The device code flow is waiting for sign-in but the prompt is hidden in MCP's stderr. Run `npm run auth-test` manually first to complete the sign-in, then restart the MCP server.
+
+**`stripHtml` losing URLs from messages**
+Teams wraps links in `<a href="...">` tags. The server extracts `href` URLs before stripping HTML so PR links and other URLs are preserved in plain text output.
+
 ## Security Notes
 
 - Tokens are cached locally at `~/.mcp-teams-chat/token-cache.json` (file permissions: owner-only 600)
 - The cache directory has 700 permissions
 - No credentials are stored in the project — only OAuth refresh tokens in the cache file
-- The server is read-only: `Chat.Read` permission, no write operations
+- Write operations: `Chat.ReadWrite` + `ChatMessage.Send` — can send messages and react to messages in chats the user is a member of
