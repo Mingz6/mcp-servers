@@ -8,7 +8,8 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces",
-    "build:teams-chat": "npm run build -w packages/teams-chat"
+    "build:teams-chat": "npm run build -w packages/teams-chat",
+    "build:outlook": "npm run build -w packages/outlook"
   },
   "engines": {
     "node": ">=18.0.0"
