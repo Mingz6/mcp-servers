@@ -26,6 +26,26 @@ async function graphFetch(
   return response.json();
 }
 
+async function graphPatch(
+  path: string,
+  body: Record<string, unknown>
+): Promise<void> {
+  const token = await getAccessToken();
+  const response = await fetch(`${GRAPH_BASE}${path}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Graph API PATCH ${response.status}: ${text}`);
+  }
+}
+
 // --- Types ---
 
 export interface MailMessage {
@@ -139,6 +159,60 @@ export async function readMessage(messageId: string): Promise<MailDetail> {
 
 export async function listUnread(top = 15): Promise<MailMessage[]> {
   return listInbox(top, "isRead eq false");
+}
+
+export async function listFolderMessages(
+  folderName: string,
+  top = 15,
+  unreadOnly = false
+): Promise<MailMessage[]> {
+  const folders = await graphFetch("/me/mailFolders", {
+    $filter: `displayName eq '${folderName}'`,
+    $select: "id,displayName",
+  });
+
+  const folder = (folders.value || [])[0];
+  if (!folder) {
+    throw new Error(`Mail folder "${folderName}" not found`);
+  }
+
+  const params: Record<string, string> = {
+    $top: String(top),
+    $select:
+      "id,subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments,importance",
+    $orderby: "receivedDateTime desc",
+  };
+  if (unreadOnly) {
+    params.$filter = "isRead eq false";
+  }
+
+  const data = await graphFetch(
+    `/me/mailFolders/${encodeURIComponent(folder.id)}/messages`,
+    params
+  );
+
+  return (data.value || []).map((msg: any) => ({
+    id: msg.id,
+    subject: msg.subject || "(no subject)",
+    from:
+      msg.from?.emailAddress?.name || msg.from?.emailAddress?.address || "Unknown",
+    receivedAt: msg.receivedDateTime,
+    preview: msg.bodyPreview || "",
+    isRead: msg.isRead,
+    hasAttachments: msg.hasAttachments,
+    importance: msg.importance,
+  }));
+}
+
+export async function markAsRead(messageIds: string[]): Promise<number> {
+  let count = 0;
+  for (const id of messageIds) {
+    await graphPatch(`/me/messages/${encodeURIComponent(id)}`, {
+      isRead: true,
+    });
+    count++;
+  }
+  return count;
 }
 
 // --- Helpers ---
