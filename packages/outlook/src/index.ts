@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { listInbox, listUnread, readMessage, searchMail } from "./graph.js";
+import { listFolderMessages, listInbox, listUnread, markAsRead, readMessage, searchMail } from "./graph.js";
 
 const server = new McpServer({
   name: "outlook",
@@ -159,6 +159,91 @@ server.tool(
 
       return {
         content: [{ type: "text" as const, text: parts.join("\n") }],
+      };
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "outlook_mark_read",
+  "Mark one or more emails as read by their IDs.",
+  {
+    messageIds: z
+      .array(z.string())
+      .min(1)
+      .describe("Array of email message IDs to mark as read"),
+  },
+  async ({ messageIds }) => {
+    try {
+      const count = await markAsRead(messageIds);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Marked ${count} email${count === 1 ? "" : "s"} as read.`,
+          },
+        ],
+      };
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "outlook_folder",
+  "List emails from a specific Outlook folder by name (e.g., 'Devops', 'Alerts', 'MSTeam', 'ItGroup').",
+  {
+    folder: z
+      .string()
+      .describe("The folder name (case-sensitive, e.g., 'Devops', 'Alerts')"),
+    count: z
+      .number()
+      .min(1)
+      .max(50)
+      .default(15)
+      .describe("Number of emails to return (default 15, max 50)"),
+    unreadOnly: z
+      .boolean()
+      .default(false)
+      .describe("If true, only return unread emails"),
+  },
+  async ({ folder, count, unreadOnly }) => {
+    try {
+      const messages = await listFolderMessages(folder, count, unreadOnly);
+
+      if (messages.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: unreadOnly
+                ? `No unread emails in "${folder}".`
+                : `No emails in "${folder}".`,
+            },
+          ],
+        };
+      }
+
+      const lines = messages.map((m, i) => {
+        const read = m.isRead ? "  " : "● ";
+        const attach = m.hasAttachments ? " 📎" : "";
+        const importance = m.importance === "high" ? " ❗" : "";
+        return [
+          `${read}${i + 1}. ${m.subject}${importance}${attach}`,
+          `   From: ${m.from} — ${formatDate(m.receivedAt)}`,
+          `   ${m.preview.slice(0, 120)}`,
+          `   ID: ${m.id}`,
+        ].join("\n");
+      });
+
+      const unreadCount = messages.filter((m) => !m.isRead).length;
+      const header = `Folder "${folder}": ${messages.length} emails shown (${unreadCount} unread)\n`;
+
+      return {
+        content: [{ type: "text" as const, text: header + lines.join("\n\n") }],
       };
     } catch (err) {
       return toolError(err);
