@@ -75,30 +75,56 @@ def _extract_text(row: sqlite3.Row) -> str:
 
     try:
         blob = bytes(abody)
-        # NSKeyedUnarchiver format — find readable text between markers
+        # NSKeyedUnarchiver format: text payload lives right after "NSString" marker
         idx = blob.find(b"NSString")
         if idx == -1:
-            idx = 0
-        chunk = blob[idx:]
-        parts = []
-        i = 0
-        skip_prefixes = (
-            "NSString", "NSOrig", "NSAttr", "NSMutable", "NSObject",
-            "NSFont", "NSColor", "NSCG", "NSParagraph", "NSKern",
-            "NSDictionary", "NSNumber", "NSValue", "NSData", "NSKeyedArchiver",
-            "__kIM",
-        )
-        while i < len(chunk):
-            if 32 <= chunk[i] < 127:
-                start = i
-                while i < len(chunk) and 32 <= chunk[i] < 127:
-                    i += 1
-                s = chunk[start:i].decode("ascii", errors="ignore")
-                if len(s) > 2 and not any(s.startswith(p) for p in skip_prefixes):
-                    parts.append(s)
-            i += 1
-        if parts:
-            return " ".join(parts[:20])
+            return "[attachment]"
+
+        rest = blob[idx + 8:]  # skip "NSString"
+
+        # Skip all non-text bytes: control chars, NSArchiver framing, length prefixes.
+        # The pattern is: NSString + control_bytes + "+" + length_bytes + real text
+        # Strategy: find the "+" type marker, skip it and length bytes, then grab text.
+        # The "+" (0x2B) is the NSArchiver typed-stream marker.
+        plus_idx = None
+        for i in range(min(20, len(rest))):
+            if rest[i] == 0x2B:  # "+"
+                plus_idx = i
+                break
+
+        if plus_idx is not None:
+            # Skip "+" and the length-encoding bytes that follow.
+            # Length is 1-3 bytes: either a single ASCII byte (short messages)
+            # or high-byte sequences. Then the text starts.
+            text_start = plus_idx + 1
+            # Skip high bytes (0x80+) used for multi-byte length encoding
+            while text_start < len(rest) and rest[text_start] >= 0x80:
+                text_start += 1
+            # Skip exactly one more byte — the final length byte (always present)
+            if text_start < len(rest):
+                text_start += 1
+        else:
+            # No "+" marker — skip control bytes and start at first printable
+            text_start = 0
+            while text_start < len(rest) and rest[text_start] < 0x20:
+                text_start += 1
+        if text_start >= len(rest):
+            return "[attachment]"
+
+        # Find end of text: stop at 0x86 0x84 (next archived object) or null
+        text_end = text_start
+        while text_end < len(rest):
+            b = rest[text_end]
+            if b == 0x00:
+                break
+            if b == 0x86 and text_end + 1 < len(rest) and rest[text_end + 1] == 0x84:
+                break
+            text_end += 1
+
+        text = rest[text_start:text_end].decode("utf-8", errors="replace").strip()
+        # Strip invisible/zero-width chars
+        text = text.strip("\u200b\ufeff")
+        return text if text else "[attachment]"
     except Exception:
         pass
 
@@ -401,7 +427,8 @@ def messages_contacts(
         lines = []
         for row in rows:
             ts = _apple_ts_to_datetime(row["last_date"])
-            svc = "SMS" if row["service_name"] and "sms" in row["service_name"].lower() else "iMsg"
+            svc_name = (row["service_name"] or "").lower()
+            svc = "SMS" if "sms" in svc_name or "rcs" in svc_name else "iMsg"
             direction = "→" if row["is_from_me"] else "←"
             text = _extract_text(row)
             preview = text[:80] + "..." if len(text) > 80 else text
