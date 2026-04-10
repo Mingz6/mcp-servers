@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
     extractPrLinks,
     findChatByParticipant,
+    getCalendarEvents,
     getMyProfile,
     listChats,
     reactToMessage,
@@ -267,6 +268,103 @@ server.tool(
           type: "text" as const,
           text: `Message sent (ID: ${msgId}).`,
         }],
+      };
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "teams_calendar",
+  "Get calendar events from Microsoft Teams/Outlook calendar. Search by date range and optionally filter by subject keyword (e.g., 'Sprint Demo', 'standup').",
+  {
+    startDate: z
+      .string()
+      .describe("Start date in ISO format or 'today', 'tomorrow', 'this_week', 'next_week'"),
+    endDate: z
+      .string()
+      .optional()
+      .describe("End date in ISO format. Defaults to 7 days from startDate if omitted"),
+    filter: z
+      .string()
+      .optional()
+      .describe("Optional keyword to filter events by subject (case-insensitive)"),
+  },
+  async ({ startDate, endDate, filter }) => {
+    try {
+      let start: Date;
+      const now = new Date();
+
+      switch (startDate) {
+        case "today":
+          start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+          break;
+        case "tomorrow":
+          start = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+          break;
+        case "this_week": {
+          const day = now.getDay();
+          const diff = day === 0 ? -6 : 1 - day;
+          start = new Date(now.getFullYear(), now.getMonth(), now.getDate() + diff);
+          break;
+        }
+        case "next_week": {
+          const day = now.getDay();
+          const diff = day === 0 ? 1 : 8 - day;
+          start = new Date(now.getFullYear(), now.getMonth(), now.getDate() + diff);
+          break;
+        }
+        default:
+          start = new Date(startDate);
+      }
+
+      let end: Date;
+      if (endDate) {
+        end = new Date(endDate);
+      } else if (startDate === "today" || startDate === "tomorrow") {
+        end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+      } else if (startDate === "this_week" || startDate === "next_week") {
+        end = new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000);
+      } else {
+        end = new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000);
+      }
+
+      const events = await getCalendarEvents(
+        start.toISOString(),
+        end.toISOString(),
+        filter
+      );
+
+      if (events.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `No events found${filter ? ` matching "${filter}"` : ""} between ${start.toLocaleDateString()} and ${end.toLocaleDateString()}.`,
+            },
+          ],
+        };
+      }
+
+      const lines = events.map((e, i) => {
+        const startTime = e.isAllDay
+          ? "All day"
+          : new Date(e.start).toLocaleString();
+        const endTime = e.isAllDay ? "" : ` — ${new Date(e.end).toLocaleString()}`;
+        const loc = e.location ? `\n   📍 ${e.location}` : "";
+        const online = e.isOnline && e.onlineUrl ? `\n   🔗 ${e.onlineUrl}` : "";
+        const body = e.bodyPreview ? `\n   ${e.bodyPreview}` : "";
+        return `${i + 1}. **${e.subject}** — ${startTime}${endTime}\n   Organizer: ${e.organizer}${loc}${online}${body}`;
+      });
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `${events.length} event(s) found:\n\n${lines.join("\n\n")}`,
+          },
+        ],
       };
     } catch (err) {
       return toolError(err);

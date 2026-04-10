@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""WeChat MCP Server — query chats, search messages, send messages.
+"""WeChat MCP Server — query chats, search messages, list contacts.
 
 Reads encrypted WeChat SQLCipher databases using cached keys.
-Sending uses macOS keyboard automation (fragile but functional).
+Read-only — sending is not supported (see README.md for why).
 
 Usage:
   # Start via MCP config (see README.md)
@@ -22,6 +22,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+import zstandard as zstd
+
 from mcp.server.fastmcp import FastMCP
 
 # ---------------------------------------------------------------------------
@@ -35,7 +37,7 @@ WECHAT_DATA = os.path.expanduser(
 KEYS_SEARCH_PATHS = [
     "/tmp/wechat_keys.json",  # fresh extraction
     os.path.expanduser(
-        "~/code/brain/family/minting-zhu/wechat-export/.keys.json"
+        "~/.wechat-export/.keys.json"
     ),  # persisted backup
 ]
 
@@ -120,6 +122,25 @@ def _sqlcipher_query(db_path: str, key: str, sql: str) -> list[dict]:
     if len(lines) < 2:
         return []
     return list(csv.DictReader(io.StringIO("\n".join(lines))))
+
+
+_zstd_dctx = zstd.ZstdDecompressor()
+
+
+def _decode_content(hex_content: str, ct: str) -> str:
+    """Decode message_content from hex, decompressing zstd (CT=4) if needed."""
+    if not hex_content:
+        return ""
+    try:
+        raw = bytes.fromhex(hex_content)
+    except ValueError:
+        return hex_content
+    if ct == "4":
+        try:
+            raw = _zstd_dctx.decompress(raw)
+        except Exception:
+            pass
+    return raw.decode("utf-8", errors="replace")
 
 
 class WeChat:
@@ -218,7 +239,8 @@ class WeChat:
         _, id2name = self.load_name2id()
         table = id2name.get(wxid)
         if not table:
-            return None
+            # Fallback: compute MD5 hash of wxid directly
+            table = f"Msg_{hashlib.md5(wxid.encode()).hexdigest()}"
         # Table could be in any message_N.db — check each
         for i in range(11):
             db_rel = f"message/message_{i}.db"
@@ -262,7 +284,8 @@ class WeChat:
         where = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
         sql = (
-            f"SELECT local_id, create_time, local_type, real_sender_id, message_content "
+            f"SELECT local_id, create_time, local_type, real_sender_id, status, "
+            f"hex(message_content) as hex_content, WCDB_CT_message_content as ct "
             f"FROM {table}{where} ORDER BY create_time DESC LIMIT {limit};"
         )
         rows = self._query(db_rel, sql)
@@ -277,7 +300,8 @@ class WeChat:
                 "time": _format_time(row.get("create_time", "0")),
                 "type": MSG_TYPES.get(type_key, f"other({type_key})"),
                 "sender": row.get("real_sender_id", ""),
-                "content": row.get("message_content", ""),
+                "is_sent": str(row.get("status", "")) == "2",
+                "content": _decode_content(row.get("hex_content", ""), row.get("ct", "0")),
             })
         messages.reverse()  # chronological order
         return messages
@@ -308,14 +332,31 @@ class WeChat:
                 if not table.startswith("Msg_"):
                     continue
                 wxid = name2id.get(table, table)
-                # Use LIKE for case-insensitive search
+                # Use LIKE for case-insensitive search on plaintext (CT=0) messages
                 safe_query = query.replace("'", "''")
+                # Search plaintext messages
                 rows = self._query(
                     db_rel,
-                    f"SELECT create_time, local_type, real_sender_id, message_content "
-                    f"FROM {table} WHERE message_content LIKE '%{safe_query}%' "
+                    f"SELECT create_time, local_type, real_sender_id, "
+                    f"hex(message_content) as hex_content, WCDB_CT_message_content as ct "
+                    f"FROM {table} WHERE WCDB_CT_message_content=0 "
+                    f"AND message_content LIKE '%{safe_query}%' "
                     f"ORDER BY create_time DESC LIMIT {limit - len(results)};",
                 )
+                # Also decompress CT=4 messages and search in Python
+                ct4_rows = self._query(
+                    db_rel,
+                    f"SELECT create_time, local_type, real_sender_id, "
+                    f"hex(message_content) as hex_content, WCDB_CT_message_content as ct "
+                    f"FROM {table} WHERE WCDB_CT_message_content=4 "
+                    f"ORDER BY create_time DESC;",
+                )
+                for row in ct4_rows:
+                    if len(rows) + len(results) >= limit:
+                        break
+                    text = _decode_content(row.get("hex_content", ""), "4")
+                    if query.lower() in text.lower():
+                        rows.append(row)
                 for row in rows:
                     raw_type = row.get("local_type", "")
                     try:
@@ -328,7 +369,7 @@ class WeChat:
                         "time": _format_time(row.get("create_time", "0")),
                         "type": MSG_TYPES.get(type_key, f"other({type_key})"),
                         "sender": row.get("real_sender_id", ""),
-                        "content": row.get("message_content", ""),
+                        "content": _decode_content(row.get("hex_content", ""), row.get("ct", "0")),
                     })
 
         results.sort(key=lambda m: m["time"], reverse=True)
@@ -412,13 +453,24 @@ def wechat_query_chat(
     header += "\n"
 
     lines = [header]
+    is_chatroom = wxid.endswith("@chatroom")
     for msg in messages:
         t, mt, content = msg["time"], msg["type"], msg.get("content", "") or ""
         sender = msg.get("sender", "")
+        is_sent = msg.get("is_sent", False)
         sender_label = ""
-        if sender and sender != wxid:
-            sender_name = wechat.get_display_name(sender)
-            sender_label = f" {sender_name}:" if sender_name != sender else f" {sender}:"
+
+        if is_chatroom:
+            # Group chat: real_sender_id is wxid, use as before
+            if sender and sender != wxid:
+                sender_name = wechat.get_display_name(sender)
+                sender_label = f" {sender_name}:" if sender_name != sender else f" {sender}:"
+        else:
+            # Direct chat: status=2 means sent by user
+            if is_sent:
+                sender_label = " Me:"
+            else:
+                sender_label = f" {display_name}:"
 
         if mt == "text":
             # Strip sender prefix that WeChat embeds in group message content
@@ -551,99 +603,6 @@ def wechat_recent_activity(days: int = 7, limit: int = 20) -> str:
         )
 
     return "\n".join(lines)
-
-
-@mcp.tool()
-def wechat_send_message(contact: str, message: str) -> str:
-    """Send a message to a WeChat contact using keyboard automation.
-
-    WARNING: This uses macOS UI automation (blind keystrokes). It will:
-    1. Activate the WeChat app
-    2. Open search, type the contact name
-    3. Select the first result
-    4. Type the message and send it
-
-    The message is typed and sent automatically. Double-check the contact name
-    is unambiguous to avoid sending to the wrong person.
-
-    Args:
-        contact: Contact name or remark (must be specific enough to be the top search result).
-        message: The text message to send.
-    """
-    # Safety: resolve contact first to verify they exist
-    matches = wechat.resolve_contact(contact)
-    if not matches:
-        return f"No contact found matching '{contact}'. Message NOT sent."
-
-    # Pick the best match for the search string
-    exact = [m for m in matches if contact.lower() in (
-        m.get("remark", "").lower(),
-        m.get("nickname", "").lower(),
-    )]
-    target = exact[0] if exact else matches[0]
-    search_name = target.get("remark") or target.get("nickname") or contact
-    display_name = search_name
-
-    # Build the AppleScript for keyboard automation
-    # Escape single quotes for AppleScript string
-    safe_search = search_name.replace("\\", "\\\\").replace('"', '\\"')
-    safe_message = message.replace("\\", "\\\\").replace('"', '\\"')
-
-    applescript = f'''
-        tell application "WeChat" to activate
-        delay 0.5
-
-        tell application "System Events"
-            tell process "WeChat"
-                -- Press Escape to clear any existing state
-                key code 53
-                delay 0.3
-
-                -- Cmd+F to open search (WeChat Mac uses this for search)
-                keystroke "f" using command down
-                delay 0.8
-
-                -- Type the contact name
-                keystroke "{safe_search}"
-                delay 1.0
-
-                -- Press Enter to select the first result
-                key code 36
-                delay 0.5
-
-                -- Press Enter again to open the chat (sometimes needed)
-                key code 36
-                delay 0.5
-
-                -- Type the message
-                keystroke "{safe_message}"
-                delay 0.3
-
-                -- Press Enter to send
-                key code 36
-            end tell
-        end tell
-    '''
-
-    try:
-        result = subprocess.run(
-            ["osascript", "-e", applescript],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode != 0:
-            return (
-                f"AppleScript error: {result.stderr.strip()}\n"
-                f"Message may NOT have been sent to {display_name}."
-            )
-        return (
-            f"Message sent to {display_name} ({target['wxid']}).\n"
-            f"NOTE: This used blind keyboard automation. "
-            f"Verify in the WeChat app that the message was delivered correctly."
-        )
-    except subprocess.TimeoutExpired:
-        return f"Timed out sending to {display_name}. Check WeChat manually."
 
 
 @mcp.tool()

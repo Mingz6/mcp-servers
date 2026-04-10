@@ -2,7 +2,7 @@
 """Export WeChat messages and contacts from decrypted SQLCipher databases.
 
 Reads keys from /tmp/wechat_keys.json (produced by extract_key.py).
-Output goes to ~/code/brain/family/minting-zhu/wechat-export/.
+Output goes to ~/.wechat-export/.
 
 Usage: python3 export_messages.py
 """
@@ -16,13 +16,24 @@ import subprocess
 import sys
 from datetime import datetime
 
-SQLCIPHER = "/opt/homebrew/bin/sqlcipher"
+SQLCIPHER = os.environ.get("SQLCIPHER_PATH", "/opt/homebrew/bin/sqlcipher")
 KEYS_FILE = "/tmp/wechat_keys.json"
-DB_DIR = os.path.expanduser(
-    "~/Library/Containers/com.tencent.xinWeChat/Data/Documents/"
-    "xwechat_files/REDACTED_ACCOUNT/db_storage"
+WECHAT_DATA = os.path.expanduser(
+    "~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files"
 )
-OUT_DIR = os.path.expanduser("~/code/brain/family/minting-zhu/wechat-export")
+OUT_DIR = os.path.expanduser("~/.wechat-export")
+
+
+def _find_db_dir() -> str:
+    """Auto-discover the db_storage path from the first account folder."""
+    for entry in sorted(os.listdir(WECHAT_DATA)):
+        candidate = os.path.join(WECHAT_DATA, entry, "db_storage")
+        if os.path.isdir(candidate):
+            return candidate
+    raise FileNotFoundError(f"No db_storage found under {WECHAT_DATA}")
+
+
+DB_DIR = _find_db_dir()
 
 MSG_TYPES = {
     "1": "text", "3": "image", "34": "voice", "42": "card",

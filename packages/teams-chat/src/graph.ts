@@ -4,7 +4,8 @@ const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
 async function graphFetch(
   path: string,
-  params?: Record<string, string>
+  params?: Record<string, string>,
+  extraHeaders?: Record<string, string>
 ): Promise<any> {
   const token = await getAccessToken();
   const url = new URL(`${GRAPH_BASE}${path}`);
@@ -17,6 +18,8 @@ async function graphFetch(
   const response = await fetch(url.toString(), {
     headers: {
       Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+      ...extraHeaders,
     },
   });
 
@@ -25,7 +28,15 @@ async function graphFetch(
     throw new Error(`Graph API ${response.status}: ${body}`);
   }
 
-  return response.json();
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error(
+      `Failed to parse Graph API JSON (${text.length} chars): ${(e as Error).message}\n` +
+      `Response starts with: ${text.slice(0, 200)}...\nResponse ends with: ...${text.slice(-200)}`
+    );
+  }
 }
 
 async function graphPost(
@@ -40,6 +51,7 @@ async function graphPost(
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
+      Accept: "application/json",
     },
     body: JSON.stringify(body),
   });
@@ -211,10 +223,68 @@ export async function sendMessage(
 ): Promise<string> {
   const response = await graphPost(
     `/chats/${encodeURIComponent(chatId)}/messages`,
-    { body: { content } }
+    { body: { contentType: "html", content } }
   );
   const data = await response.json();
   return data.id;
+}
+
+// --- Calendar ---
+
+export interface CalendarEvent {
+  id: string;
+  subject: string;
+  start: string;
+  end: string;
+  isAllDay: boolean;
+  location: string;
+  organizer: string;
+  isOnline: boolean;
+  onlineUrl: string | null;
+  bodyPreview: string;
+}
+
+export async function getCalendarEvents(
+  startDate: string,
+  endDate: string,
+  filter?: string
+): Promise<CalendarEvent[]> {
+  const data = await graphFetch(
+    "/me/calendarView",
+    {
+      startDateTime: new Date(startDate).toISOString(),
+      endDateTime: new Date(endDate).toISOString(),
+      $top: "50",
+      $orderby: "start/dateTime",
+      $select:
+        "id,subject,start,end,isAllDay,location,organizer,isOnlineMeeting,onlineMeeting,bodyPreview",
+    },
+    { Prefer: 'outlook.timezone="America/Edmonton"' }
+  );
+
+  let events: CalendarEvent[] = (data.value || []).map((e: any) => ({
+    id: e.id,
+    subject: e.subject || "(no subject)",
+    start: e.start?.dateTime || "",
+    end: e.end?.dateTime || "",
+    isAllDay: e.isAllDay || false,
+    location: e.location?.displayName || "",
+    organizer: e.organizer?.emailAddress?.name || "",
+    isOnline: e.isOnlineMeeting || false,
+    onlineUrl: e.onlineMeeting?.joinUrl || null,
+    bodyPreview: truncate(e.bodyPreview || "", 200),
+  }));
+
+  if (filter) {
+    const lower = filter.toLowerCase();
+    events = events.filter(
+      (e) =>
+        e.subject.toLowerCase().includes(lower) ||
+        e.bodyPreview.toLowerCase().includes(lower)
+    );
+  }
+
+  return events;
 }
 
 // --- Helpers ---

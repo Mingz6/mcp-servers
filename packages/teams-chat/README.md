@@ -13,6 +13,7 @@ MCP server for Microsoft Teams chat — read messages, send replies, react to me
 | `teams_get_pending_reviews` | Extract GitHub PR links from a chat (e.g., "Build Team PRs++"), filter out your own, deduplicate |
 | `teams_react_to_message` | React to a message with any emoji (✅, ❌, 👍, etc.) |
 | `teams_send_message` | Send a message to a chat |
+| `teams_calendar` | Get calendar events by date range, with optional subject filter (e.g., "Sprint Demo") |
 
 ## Setup
 
@@ -36,6 +37,7 @@ MCP server for Microsoft Teams chat — read messages, send replies, react to me
    - `Chat.ReadWrite` (read chats + send messages)
    - `ChatMessage.Send` (send messages)
    - `User.Read` (identify the authenticated user)
+   - `Calendars.Read` (read calendar events for sprint demo prep)
 4. Click **Grant admin consent** if you have admin access. If not, you'll be prompted to consent on first login — your tenant admin may need to approve the permissions.
 
 ### 3. Configure Environment
