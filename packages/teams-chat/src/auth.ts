@@ -10,7 +10,7 @@ import { join } from "path";
 const CACHE_DIR = join(homedir(), ".mcp-teams-chat");
 const CACHE_PATH = join(CACHE_DIR, "token-cache.json");
 
-const SCOPES = ["Chat.ReadWrite", "ChatMessage.Send", "User.Read"];
+const SCOPES = ["Chat.ReadWrite", "ChatMessage.Send", "User.Read", "Calendars.Read"];
 
 let msalInstance: PublicClientApplication | null = null;
 

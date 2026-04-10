@@ -8,7 +8,8 @@ All MCP servers in one place — custom and third-party. VS Code's `mcp.json` po
 |--------|------|-------------|---------------|
 | [teams-chat](packages/teams-chat/) | Custom (Node) | Read/send Teams messages, extract PR links | Standup, PR review requests, colleague replies |
 | [outlook](packages/outlook/) | Custom (Node) | Read Outlook emails, search, mark read | Email triage during standup, PO reply detection |
-| [wechat](packages/wechat/) | Custom (Python) | Query WeChat chats, search messages, send | Family/personal chat access from Copilot |
+| [wechat](packages/wechat/) | Custom (Python) | Query WeChat chats, search messages (read-only) | Family/personal chat access from Copilot |
+| flywheel *(planned)* | Custom (Node) | Track reference repos, check updates, scout for new patterns | Daily self-improvement loop — knowledge aggregator for `/flywheel` skill |
 | awesome-copilot | Third-party (Docker) | Microsoft MCP .NET sample — copilot instructions search | Load custom copilot instructions dynamically |
 | context7 | Third-party (npx) | Fetch up-to-date library docs from Upstash | Get current API docs instead of outdated training data |
 
@@ -18,8 +19,13 @@ All MCP servers in one place — custom and third-party. VS Code's `mcp.json` po
 mcp-servers/
 ├── packages/
 │   ├── teams-chat/    # Custom — MS Teams via Graph API
+│   │   └── run.sh     # Wrapper: loads nvm → exec node dist/index.js
 │   ├── outlook/       # Custom — Outlook via Graph API
-│   └── wechat/        # Custom — WeChat via SQLCipher + keyboard automation
+│   │   └── run.sh     # Wrapper: loads nvm → exec node dist/index.js
+│   ├── wechat/        # Custom — WeChat via SQLCipher (read-only)
+│   │   └── run.sh     # Wrapper: activates .venv → exec python mcp_server.py
+│   └── imessage/      # Custom — iMessage/SMS via macOS Messages.app
+│       └── run.sh     # Wrapper: activates .venv → exec python mcp_server.py
 ├── scripts/
 │   └── npx-nvm.sh     # Wrapper: loads nvm before running npx (for third-party servers)
 └── README.md           # This file — the single registry
@@ -41,8 +47,30 @@ python3 -m venv .venv
 
 ## VS Code Config
 
-All servers are registered in `~/Library/Application Support/Code/User/mcp.json`.
-That file should only contain server entries — all paths point back into this repo.
+All servers are registered in your VS Code `mcp.json` (user or workspace level).
+Each custom server uses a `run.sh` wrapper — no hardcoded Python/Node paths:
+
+```jsonc
+{
+    "servers": {
+        "teams-chat": {
+            "type": "stdio",
+            "command": "${userHome}/code/personal/mcp-servers/packages/teams-chat/run.sh",
+            "env": {
+                "TEAMS_MCP_CLIENT_ID": "your-client-id",
+                "TEAMS_MCP_TENANT_ID": "your-tenant-id"
+            }
+        },
+        "wechat": {
+            "type": "stdio",
+            "command": "${userHome}/code/personal/mcp-servers/packages/wechat/run.sh"
+        }
+    }
+}
+```
+
+The wrappers handle runtime discovery (nvm for Node, .venv for Python) so upgrading
+Node/Python versions won't break your MCP config.
 
 ## Adding a New Server
 
@@ -70,9 +98,9 @@ That file should only contain server entries — all paths point back into this 
 
 **Server won't start in VS Code?**
 - Check `mcp.json` paths are correct (use `${userHome}` not `~`)
-- For Node servers: verify `which node` matches the path in `mcp.json`
+- Run the `run.sh` manually to test: `./packages/teams-chat/run.sh`
+- For Python servers: check `.venv` exists — the wrapper will tell you how to create it
 - For npx servers: run `scripts/npx-nvm.sh -y <package>` manually to test
-- For Python servers: verify the `.venv/bin/python` path exists
 
 **Auth issues?**
 - Teams/Outlook: run the auth-test script in the package → `npm run auth-test`

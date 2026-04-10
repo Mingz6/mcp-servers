@@ -249,12 +249,14 @@ def main():
 
     with open(out_file, 'w') as f:
         json.dump(result, f, indent=2)
+    os.chmod(out_file, 0o600)
     print(f"Keys saved to: {out_file}")
 
     if key_map:
         primary_key = list(key_map.values())[0]
         with open("/tmp/wechat_key.txt", 'w') as f:
             f.write(primary_key)
+        os.chmod("/tmp/wechat_key.txt", 0o600)
         print(f"Primary key: /tmp/wechat_key.txt")
 
     if missing:
