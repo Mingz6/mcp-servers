@@ -10,7 +10,7 @@ import { join } from "path";
 const CACHE_DIR = join(homedir(), ".mcp-outlook");
 const CACHE_PATH = join(CACHE_DIR, "token-cache.json");
 
-const SCOPES = ["Mail.ReadWrite", "User.Read"];
+const SCOPES = ["Mail.ReadWrite", "Mail.Send", "User.Read"];
 
 let msalInstance: PublicClientApplication | null = null;
 

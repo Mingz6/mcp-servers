@@ -46,6 +46,26 @@ async function graphPatch(
   }
 }
 
+async function graphPost(
+  path: string,
+  body: Record<string, unknown>
+): Promise<void> {
+  const token = await getAccessToken();
+  const response = await fetch(`${GRAPH_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Graph API POST ${response.status}: ${text}`);
+  }
+}
+
 // --- Types ---
 
 export interface MailMessage {
@@ -202,6 +222,81 @@ export async function listFolderMessages(
     hasAttachments: msg.hasAttachments,
     importance: msg.importance,
   }));
+}
+
+export async function sendMail(
+  to: string[],
+  subject: string,
+  body: string,
+  cc?: string[],
+  bcc?: string[]
+): Promise<void> {
+  const toRecipients = to.map((addr) => ({
+    emailAddress: { address: addr },
+  }));
+  const ccRecipients = (cc || []).map((addr) => ({
+    emailAddress: { address: addr },
+  }));
+  const bccRecipients = (bcc || []).map((addr) => ({
+    emailAddress: { address: addr },
+  }));
+
+  await graphPost("/me/sendMail", {
+    message: {
+      subject,
+      body: { contentType: "Text", content: body },
+      toRecipients,
+      ccRecipients,
+      bccRecipients,
+    },
+  });
+}
+
+export interface AttachmentInfo {
+  id: string;
+  name: string;
+  contentType: string;
+  size: number;
+  isInline: boolean;
+}
+
+export interface AttachmentContent extends AttachmentInfo {
+  contentBytes: string; // base64
+}
+
+export async function listAttachments(
+  messageId: string
+): Promise<AttachmentInfo[]> {
+  const data = await graphFetch(
+    `/me/messages/${encodeURIComponent(messageId)}/attachments`,
+    { $select: "id,name,contentType,size,isInline" }
+  );
+
+  return (data.value || []).map((a: any) => ({
+    id: a.id,
+    name: a.name || "(unnamed)",
+    contentType: a.contentType || "application/octet-stream",
+    size: a.size || 0,
+    isInline: a.isInline || false,
+  }));
+}
+
+export async function downloadAttachment(
+  messageId: string,
+  attachmentId: string
+): Promise<AttachmentContent> {
+  const data = await graphFetch(
+    `/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`
+  );
+
+  return {
+    id: data.id,
+    name: data.name || "(unnamed)",
+    contentType: data.contentType || "application/octet-stream",
+    size: data.size || 0,
+    isInline: data.isInline || false,
+    contentBytes: data.contentBytes || "",
+  };
 }
 
 export async function markAsRead(messageIds: string[]): Promise<number> {
