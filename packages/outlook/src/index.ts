@@ -1,7 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { listFolderMessages, listInbox, listUnread, markAsRead, readMessage, searchMail } from "./graph.js";
+import { mkdir, writeFile } from "fs/promises";
+import { join } from "path";
+import { tmpdir } from "os";
+import { downloadAttachment, listAttachments, listFolderMessages, listInbox, listUnread, markAsRead, readMessage, searchMail, sendMail } from "./graph.js";
 
 const server = new McpServer({
   name: "outlook",
@@ -244,6 +247,114 @@ server.tool(
 
       return {
         content: [{ type: "text" as const, text: header + lines.join("\n\n") }],
+      };
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "outlook_attachments",
+  "List attachments on an email. Use outlook_inbox or outlook_search first to find the message ID.",
+  {
+    messageId: z
+      .string()
+      .describe("The email message ID"),
+  },
+  async ({ messageId }) => {
+    try {
+      const attachments = await listAttachments(messageId);
+
+      if (attachments.length === 0) {
+        return {
+          content: [{ type: "text" as const, text: "No attachments on this email." }],
+        };
+      }
+
+      const lines = attachments.map((a, i) => {
+        const sizeKb = (a.size / 1024).toFixed(1);
+        const inline = a.isInline ? " (inline)" : "";
+        return `${i + 1}. ${a.name}${inline}\n   Type: ${a.contentType} | Size: ${sizeKb} KB\n   ID: ${a.id}`;
+      });
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Attachments (${attachments.length}):\n\n${lines.join("\n\n")}`,
+          },
+        ],
+      };
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "outlook_download_attachment",
+  "Download an email attachment to a local temp file. Returns the file path. Use outlook_attachments first to get the attachment ID.",
+  {
+    messageId: z
+      .string()
+      .describe("The email message ID"),
+    attachmentId: z
+      .string()
+      .describe("The attachment ID (from outlook_attachments)"),
+  },
+  async ({ messageId, attachmentId }) => {
+    try {
+      const attachment = await downloadAttachment(messageId, attachmentId);
+      const dir = join(tmpdir(), "outlook-attachments");
+      await mkdir(dir, { recursive: true });
+      const safeName = attachment.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const filePath = join(dir, safeName);
+      await writeFile(filePath, Buffer.from(attachment.contentBytes, "base64"));
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Downloaded: ${attachment.name}\nType: ${attachment.contentType}\nSize: ${(attachment.size / 1024).toFixed(1)} KB\nSaved to: ${filePath}`,
+          },
+        ],
+      };
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "outlook_send",
+  "Send an email from the work Outlook account (mzhu@nurses.ab.ca).",
+  {
+    to: z
+      .array(z.string())
+      .min(1)
+      .describe("Array of recipient email addresses"),
+    subject: z.string().describe("Email subject line"),
+    body: z.string().describe("Plain text email body"),
+    cc: z
+      .array(z.string())
+      .optional()
+      .describe("Optional CC recipients"),
+    bcc: z
+      .array(z.string())
+      .optional()
+      .describe("Optional BCC recipients"),
+  },
+  async ({ to, subject, body, cc, bcc }) => {
+    try {
+      await sendMail(to, subject, body, cc, bcc);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Email sent to ${to.join(", ")}${cc?.length ? ` (CC: ${cc.join(", ")})` : ""}.`,
+          },
+        ],
       };
     } catch (err) {
       return toolError(err);
