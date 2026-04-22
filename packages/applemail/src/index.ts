@@ -338,7 +338,7 @@ server.tool(
 
 server.tool(
   "applemail_send",
-  "Send an email via Apple Mail. Supports attachments. Apple Mail must be running.",
+  "Send an email via Apple Mail, OR create a draft for user review (preferred default). Apple Mail must be running.",
   {
     to: z.array(z.string()).min(1).describe("Recipient email addresses"),
     cc: z
@@ -361,10 +361,17 @@ server.tool(
       .array(z.string())
       .optional()
       .describe("Array of absolute file paths to attach"),
+    draft: z
+      .boolean()
+      .optional()
+      .default(true)
+      .describe(
+        "DEFAULT TRUE. When true, opens a visible draft window in Apple Mail for the user to review and send manually. When false, sends immediately without confirmation. Only set false after the user has explicitly approved the exact draft content."
+      ),
   },
-  async ({ to, cc, bcc, subject, body, from, attachments }) => {
+  async ({ to, cc, bcc, subject, body, from, attachments, draft }) => {
     try {
-      sendMail({ to, cc, bcc, subject, body, from, attachments });
+      sendMail({ to, cc, bcc, subject, body, from, attachments, draft });
 
       const attachNote = attachments?.length
         ? ` with ${attachments.length} attachment(s)`
@@ -374,7 +381,9 @@ server.tool(
         content: [
           {
             type: "text" as const,
-            text: `Email sent to ${to.join(", ")}${attachNote}.`,
+            text: draft
+              ? `Draft opened in Apple Mail for review. To: ${to.join(", ")}${cc?.length ? ` | CC: ${cc.join(", ")}` : ""}${attachNote}. User must review and click Send.`
+              : `Email SENT to ${to.join(", ")}${attachNote}.`,
           },
         ],
       };

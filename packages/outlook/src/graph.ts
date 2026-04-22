@@ -66,6 +66,27 @@ async function graphPost(
   }
 }
 
+async function graphPostJson<T>(
+  path: string,
+  body: Record<string, unknown>
+): Promise<T> {
+  const token = await getAccessToken();
+  const response = await fetch(`${GRAPH_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Graph API POST ${response.status}: ${text}`);
+  }
+  return (await response.json()) as T;
+}
+
 // --- Types ---
 
 export interface MailMessage {
@@ -250,6 +271,40 @@ export async function sendMail(
       bccRecipients,
     },
   });
+}
+
+export async function createDraft(
+  to: string[],
+  subject: string,
+  body: string,
+  cc?: string[],
+  bcc?: string[]
+): Promise<{ id: string; webLink: string }> {
+  const toRecipients = to.map((addr) => ({
+    emailAddress: { address: addr },
+  }));
+  const ccRecipients = (cc || []).map((addr) => ({
+    emailAddress: { address: addr },
+  }));
+  const bccRecipients = (bcc || []).map((addr) => ({
+    emailAddress: { address: addr },
+  }));
+
+  const result = await graphPostJson<{ id: string; webLink: string }>(
+    "/me/messages",
+    {
+      subject,
+      body: { contentType: "Text", content: body },
+      toRecipients,
+      ccRecipients,
+      bccRecipients,
+    }
+  );
+
+  return {
+    id: result.id,
+    webLink: result.webLink,
+  };
 }
 
 export interface AttachmentInfo {
