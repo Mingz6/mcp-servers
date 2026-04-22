@@ -11,6 +11,7 @@ export interface SendMailOptions {
   body: string;
   from?: string;
   attachments?: string[];
+  draft?: boolean;
 }
 
 function escapeAppleScript(str: string): string {
@@ -26,12 +27,13 @@ export function sendMail(options: SendMailOptions): void {
     body,
     from,
     attachments = [],
+    draft = false,
   } = options;
 
   if (to.length === 0) throw new Error("At least one recipient is required");
 
   let script = "tell application \"Mail\"\n";
-  script += `  set newMessage to make new outgoing message with properties {subject:"${escapeAppleScript(subject)}", content:"${escapeAppleScript(body)}", visible:false}\n`;
+  script += `  set newMessage to make new outgoing message with properties {subject:"${escapeAppleScript(subject)}", content:"${escapeAppleScript(body)}", visible:${draft ? "true" : "false"}}\n`;
   script += "  tell newMessage\n";
 
   if (from) {
@@ -52,7 +54,11 @@ export function sendMail(options: SendMailOptions): void {
   }
 
   script += "  end tell\n";
-  script += "  send newMessage\n";
+  if (!draft) {
+    script += "  send newMessage\n";
+  } else {
+    script += "  activate\n";
+  }
   script += "end tell\n";
 
   const tmpFile = join(tmpdir(), `applemail-send-${Date.now()}.scpt`);

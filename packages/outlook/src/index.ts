@@ -4,7 +4,7 @@ import { z } from "zod";
 import { mkdir, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
-import { downloadAttachment, listAttachments, listFolderMessages, listInbox, listUnread, markAsRead, readMessage, searchMail, sendMail } from "./graph.js";
+import { downloadAttachment, listAttachments, listFolderMessages, listInbox, listUnread, markAsRead, readMessage, searchMail, sendMail, createDraft } from "./graph.js";
 
 const server = new McpServer({
   name: "outlook",
@@ -328,7 +328,7 @@ server.tool(
 
 server.tool(
   "outlook_send",
-  "Send an email from the work Outlook account (mzhu@nurses.ab.ca).",
+  "Send an email from the work Outlook account, OR create a draft for user review (preferred default).",
   {
     to: z
       .array(z.string())
@@ -344,15 +344,33 @@ server.tool(
       .array(z.string())
       .optional()
       .describe("Optional BCC recipients"),
+    draft: z
+      .boolean()
+      .optional()
+      .default(true)
+      .describe(
+        "DEFAULT TRUE. When true, saves to Outlook Drafts folder for user review (returns webLink to open). When false, sends immediately. Only set false after the user has explicitly approved the exact draft content."
+      ),
   },
-  async ({ to, subject, body, cc, bcc }) => {
+  async ({ to, subject, body, cc, bcc, draft }) => {
     try {
+      if (draft) {
+        const { webLink } = await createDraft(to, subject, body, cc, bcc);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Draft saved to Outlook Drafts folder. To: ${to.join(", ")}${cc?.length ? ` | CC: ${cc.join(", ")}` : ""}. Open for review: ${webLink}`,
+            },
+          ],
+        };
+      }
       await sendMail(to, subject, body, cc, bcc);
       return {
         content: [
           {
             type: "text" as const,
-            text: `Email sent to ${to.join(", ")}${cc?.length ? ` (CC: ${cc.join(", ")})` : ""}.`,
+            text: `Email SENT to ${to.join(", ")}${cc?.length ? ` (CC: ${cc.join(", ")})` : ""}.`,
           },
         ],
       };
