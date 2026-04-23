@@ -1,7 +1,7 @@
 import { execSync } from "child_process";
-import { writeFileSync, unlinkSync } from "fs";
-import { join } from "path";
+import { unlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
+import { join } from "path";
 
 export interface SendMailOptions {
   to: string[];

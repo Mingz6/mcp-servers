@@ -5,6 +5,7 @@ import {
     extractPrLinks,
     findChatByParticipant,
     getCalendarEvents,
+    getMessageHostedContent,
     getMyProfile,
     listChats,
     reactToMessage,
@@ -72,23 +73,50 @@ server.tool(
       .max(50)
       .default(30)
       .describe("Number of recent messages to return (default 30, max 50)"),
+    includeImages: z
+      .boolean()
+      .default(false)
+      .describe("Fetch and return inline images/screenshots as image content blocks (slower when true)"),
   },
-  async ({ chatId, count }) => {
+  async ({ chatId, count, includeImages }) => {
     try {
       const messages = await readChatMessages(chatId, count);
-      const lines = messages.map((m) => {
-        const date = new Date(m.createdAt).toLocaleString();
-        return `[${date}] ${m.from} (msgId: ${m.id}): ${m.body}`;
-      });
+      const content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[] = [];
 
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: lines.join("\n") || "No messages found in this chat.",
-          },
-        ],
-      };
+      for (const m of messages) {
+        const date = new Date(m.createdAt).toLocaleString();
+        const imageTag = !includeImages && m.hostedContentIds.length > 0
+          ? ` [📎 ${m.hostedContentIds.length} image${m.hostedContentIds.length > 1 ? "s" : ""}]`
+          : "";
+        content.push({
+          type: "text" as const,
+          text: `[${date}] ${m.from} (msgId: ${m.id}): ${m.body}${imageTag}`,
+        });
+
+        if (includeImages) {
+          for (const contentId of m.hostedContentIds) {
+            try {
+              const img = await getMessageHostedContent(chatId, m.id, contentId);
+              content.push({
+                type: "image" as const,
+                data: img.data,
+                mimeType: img.mimeType,
+              });
+            } catch (e) {
+              content.push({
+                type: "text" as const,
+                text: `[Failed to fetch image: ${e instanceof Error ? e.message : String(e)}]`,
+              });
+            }
+          }
+        }
+      }
+
+      if (content.length === 0) {
+        content.push({ type: "text" as const, text: "No messages found in this chat." });
+      }
+
+      return { content };
     } catch (err) {
       return toolError(err);
     }

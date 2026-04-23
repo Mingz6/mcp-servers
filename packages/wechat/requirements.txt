@@ -1,3 +1,4 @@
 # WeChat MCP server + message export scripts
 # Most packages are transitive deps of mcp[cli]
 mcp>=1.27.0
+pilk>=0.2.0

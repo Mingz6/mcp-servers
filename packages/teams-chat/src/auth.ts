@@ -3,12 +3,13 @@ import {
     type DeviceCodeRequest,
     type TokenCacheContext,
 } from "@azure/msal-node";
-import { mkdir, readFile, unlink, writeFile } from "fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "fs/promises";
 import { homedir } from "os";
 import { join } from "path";
 
 const CACHE_DIR = join(homedir(), ".mcp-teams-chat");
 const CACHE_PATH = join(CACHE_DIR, "token-cache.json");
+const CACHE_TMP_PATH = `${CACHE_PATH}.tmp`;
 
 const SCOPES = ["Chat.ReadWrite", "ChatMessage.Send", "User.Read", "Calendars.Read"];
 
@@ -16,15 +17,24 @@ let msalInstance: PublicClientApplication | null = null;
 
 async function loadCache(): Promise<string | undefined> {
   try {
-    return await readFile(CACHE_PATH, "utf-8");
-  } catch {
+    const data = await readFile(CACHE_PATH, "utf-8");
+    // Validate before handing to MSAL — a corrupt cache crashes every tool call.
+    JSON.parse(data);
+    return data;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    console.error(`[teams-chat] Token cache unreadable (${(err as Error).message}) — starting fresh.`);
+    try { await unlink(CACHE_PATH); } catch { /* ignore */ }
     return undefined;
   }
 }
 
 async function saveCache(cache: string): Promise<void> {
   await mkdir(CACHE_DIR, { recursive: true, mode: 0o700 });
-  await writeFile(CACHE_PATH, cache, { mode: 0o600 });
+  // Atomic write: full file to .tmp, then rename. Prevents partial/concurrent writes
+  // from corrupting the cache (which makes MSAL throw on every subsequent call).
+  await writeFile(CACHE_TMP_PATH, cache, { mode: 0o600 });
+  await rename(CACHE_TMP_PATH, CACHE_PATH);
 }
 
 export async function getMsalInstance(): Promise<PublicClientApplication> {

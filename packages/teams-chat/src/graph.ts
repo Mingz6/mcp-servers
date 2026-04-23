@@ -39,6 +39,24 @@ async function graphFetch(
   }
 }
 
+async function graphFetchBinary(path: string): Promise<{ data: Buffer; contentType: string }> {
+  const token = await getAccessToken();
+  const url = `${GRAPH_BASE}${path}`;
+
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Graph API ${response.status}: ${body}`);
+  }
+
+  const contentType = response.headers.get("content-type") || "application/octet-stream";
+  const arrayBuffer = await response.arrayBuffer();
+  return { data: Buffer.from(arrayBuffer), contentType };
+}
+
 async function graphPost(
   path: string,
   body: Record<string, unknown>
@@ -81,6 +99,7 @@ export interface ChatMessage {
   body: string;
   createdAt: string;
   messageType: string;
+  hostedContentIds: string[];
 }
 
 // --- API Functions ---
@@ -130,6 +149,7 @@ export async function readChatMessages(
       body: stripHtml(msg.body.content),
       createdAt: msg.createdDateTime,
       messageType: msg.messageType,
+      hostedContentIds: extractHostedContentIds(msg.body.content),
     }))
     .reverse();
 }
@@ -285,6 +305,28 @@ export async function getCalendarEvents(
   }
 
   return events;
+}
+
+// --- Image / Hosted Content ---
+
+function extractHostedContentIds(html: string): string[] {
+  const regex = /hostedContents\/([^/]+)\/\$value/gi;
+  const ids: string[] = [];
+  let match;
+  while ((match = regex.exec(html)) !== null) {
+    ids.push(match[1]);
+  }
+  return [...new Set(ids)];
+}
+
+export async function getMessageHostedContent(
+  chatId: string,
+  messageId: string,
+  hostedContentId: string
+): Promise<{ data: string; mimeType: string }> {
+  const path = `/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/hostedContents/${encodeURIComponent(hostedContentId)}/$value`;
+  const { data, contentType } = await graphFetchBinary(path);
+  return { data: data.toString("base64"), mimeType: contentType };
 }
 
 // --- Helpers ---

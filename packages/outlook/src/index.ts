@@ -1,10 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
 import { mkdir, writeFile } from "fs/promises";
-import { join } from "path";
 import { tmpdir } from "os";
-import { downloadAttachment, listAttachments, listFolderMessages, listInbox, listUnread, markAsRead, readMessage, searchMail, sendMail, createDraft } from "./graph.js";
+import { join } from "path";
+import { z } from "zod";
+import { createDraft, downloadAttachment, listAttachments, listFolderMessages, listInbox, listUnread, markAsRead, readMessage, searchMail, sendMail } from "./graph.js";
 
 const server = new McpServer({
   name: "outlook",
