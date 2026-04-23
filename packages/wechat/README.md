@@ -17,6 +17,18 @@ and run an MCP server for live chat queries + message sending.
 - When you want a fresh export of all chat history
 - Keys change on WeChat restart, so re-extract if the saved keys stop working
 
+## Quick Refresh (one-shot script)
+
+For routine refreshes after a WeChat update, use the wrapper script — it runs all 5 steps below in order, prompting for sudo and the QR-code login:
+
+```bash
+~/code/brain/scripts/refresh-wechat.sh
+```
+
+Then in VS Code: `Cmd+Shift+P` → `MCP: Restart Server` → wechat.
+
+The manual steps below are for first-time setup or debugging.
+
 ## Prerequisites
 
 ```bash
@@ -75,7 +87,14 @@ Output goes to `~/.wechat-export/` (gitignored):
 ```bash
 cp /tmp/wechat_keys.json ~/.wechat-export/.keys.json
 cp /tmp/wechat_key.txt ~/.wechat-export/.primary_key.txt
+# Strip macOS xattrs so Docker Desktop bind mounts (worker-center) can read them
+xattr -c ~/.wechat-export/.keys.json ~/.wechat-export/.primary_key.txt
 ```
+
+> **Why `xattr -c`?** macOS may attach `com.apple.provenance` to files written
+> by sandboxed apps. Docker Desktop on macOS rejects reads on files carrying
+> that xattr from inside containers (`PermissionError: Operation not permitted`),
+> even though host-side `cat`/`ls` works fine. Stripping it once is enough.
 
 ## How It Works
 
@@ -93,7 +112,8 @@ cp /tmp/wechat_key.txt ~/.wechat-export/.primary_key.txt
 | `WeChat is not running` | Launch WeChat and login first |
 | Keys don't work after restart | Re-run `extract_key.py` — WCDB regenerates keys on restart |
 | WeChat won't launch after re-sign | Reinstall from wechat.com, then re-sign |
-| `Operation not permitted` | Run with `sudo` |
+| `Operation not permitted` (running extract_key.py) | Run with `sudo` |
+| `Operation not permitted: '/wechat-keys.json'` (inside Docker container, e.g. worker-center) | macOS xattr blocking Docker bind mount. Fix: `xattr -c ~/.wechat-export/.keys.json && docker compose restart worker-center` (in the consuming repo). Re-running `extract_key.py` after this patch handles it automatically. |
 
 ## MCP Server
 
