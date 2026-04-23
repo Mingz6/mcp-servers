@@ -18,10 +18,12 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+import pilk
 import zstandard as zstd
 
 from mcp.server.fastmcp import FastMCP
@@ -375,6 +377,100 @@ class WeChat:
         results.sort(key=lambda m: m["time"], reverse=True)
         return results[:limit]
 
+    def find_voice_audio(
+        self, wxid: str, svr_id: str
+    ) -> Optional[bytes]:
+        """Find voice audio blob from media DBs by svr_id.
+        Returns raw SILK bytes or None.
+        """
+        for media_db in ["message/media_0.db", "message/media_1.db"]:
+            entry = self.keys.get(media_db)
+            if not entry:
+                continue
+            # Find chat_name_id for this wxid in the media DB's Name2Id
+            name_rows = self._query(media_db, "SELECT rowid, user_name FROM Name2Id;")
+            chat_name_id = None
+            for r in name_rows:
+                if r.get("user_name") == wxid:
+                    chat_name_id = r.get("rowid")
+                    break
+            if not chat_name_id:
+                continue
+
+            # Extract voice_data blob via writefile to a temp path
+            tmp_path = os.path.join(tempfile.gettempdir(), f"wechat_voice_{svr_id}.silk")
+            db_path = os.path.join(self.db_dir, media_db)
+            commands = (
+                f"PRAGMA key = \"x'{entry['enc_key']}'\";\n"
+                "PRAGMA cipher_compatibility = 4;\n"
+                "PRAGMA cipher_page_size = 4096;\n"
+                f"SELECT writefile('{tmp_path}', voice_data) FROM VoiceInfo "
+                f"WHERE chat_name_id={chat_name_id} AND svr_id={svr_id};\n"
+            )
+            subprocess.run(
+                [SQLCIPHER, db_path],
+                input=commands.encode(),
+                capture_output=True,
+                timeout=30,
+            )
+            if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+                with open(tmp_path, "rb") as f:
+                    data = f.read()
+                os.unlink(tmp_path)
+                return data
+
+        return None
+
+    def get_voice_messages(
+        self,
+        wxid: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Get voice messages for a contact with metadata."""
+        result = self.find_chat_db(wxid)
+        if not result:
+            return []
+        db_rel, table = result
+
+        where_parts = ["(local_type & 0xFFFF) = 34"]
+        if start_date:
+            ts = int(datetime.strptime(start_date, "%Y-%m-%d").timestamp())
+            where_parts.append(f"create_time >= {ts}")
+        if end_date:
+            ts = int(
+                (datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)).timestamp()
+            )
+            where_parts.append(f"create_time < {ts}")
+
+        where = f" WHERE {' AND '.join(where_parts)}"
+        sql = (
+            f"SELECT local_id, server_id, create_time, real_sender_id, status "
+            f"FROM {table}{where} ORDER BY create_time DESC LIMIT {limit};"
+        )
+        rows = self._query(db_rel, sql)
+
+        messages = []
+        for row in rows:
+            is_sent = str(row.get("status", "")) == "2"
+            sender = row.get("real_sender_id", "")
+            if wxid.endswith("@chatroom") and sender and sender != wxid:
+                sender_name = self.get_display_name(sender)
+            elif is_sent:
+                sender_name = "Me"
+            else:
+                sender_name = self.get_display_name(wxid)
+
+            messages.append({
+                "time": _format_time(row.get("create_time", "0")),
+                "server_id": row.get("server_id", ""),
+                "sender": sender_name,
+                "is_sent": is_sent,
+            })
+        messages.reverse()
+        return messages
+
 
 def _format_time(ts: str) -> str:
     try:
@@ -384,6 +480,85 @@ def _format_time(ts: str) -> str:
     except (ValueError, TypeError, OSError):
         pass
     return "unknown"
+
+
+# Whisper model resolution
+WHISPER_CLI = "/opt/homebrew/bin/whisper-cli"
+WHISPER_MODEL_DIR = os.path.expanduser("~/.local/share/whisper-cpp/models")
+WHISPER_MODEL_PREFS = [
+    "ggml-large-v3-turbo.bin",
+    "ggml-medium.bin",
+    "ggml-small.bin",
+    "ggml-base.bin",
+]
+
+
+def _find_whisper_model() -> Optional[str]:
+    """Find the best available whisper model."""
+    if not os.path.isdir(WHISPER_MODEL_DIR):
+        return None
+    for name in WHISPER_MODEL_PREFS:
+        path = os.path.join(WHISPER_MODEL_DIR, name)
+        if os.path.exists(path):
+            return path
+    # Fallback: pick any .bin file
+    for f in os.listdir(WHISPER_MODEL_DIR):
+        if f.endswith(".bin"):
+            return os.path.join(WHISPER_MODEL_DIR, f)
+    return None
+
+
+def _silk_to_text(silk_data: bytes, language: str = "zh") -> str:
+    """Convert SILK v3 audio bytes to transcribed text.
+    Pipeline: SILK → PCM (pilk) → WAV (ffmpeg) → text (whisper-cli).
+    """
+    with tempfile.TemporaryDirectory(prefix="wechat_voice_") as tmpdir:
+        silk_path = os.path.join(tmpdir, "voice.silk")
+        pcm_path = os.path.join(tmpdir, "voice.pcm")
+        wav_path = os.path.join(tmpdir, "voice.wav")
+
+        # Strip WeChat's 0x02 prefix byte
+        if silk_data[:1] == b"\x02":
+            silk_data = silk_data[1:]
+        with open(silk_path, "wb") as f:
+            f.write(silk_data)
+
+        # SILK → PCM (24kHz)
+        try:
+            pilk.decode(silk_path, pcm_path)
+        except Exception as e:
+            return f"[decode error: {e}]"
+
+        # PCM → WAV (16kHz mono for whisper)
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y", "-f", "s16le", "-ar", "24000", "-ac", "1",
+                "-i", pcm_path, "-ar", "16000", "-ac", "1", wav_path,
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return f"[ffmpeg error: {result.stderr.decode()[:200]}]"
+
+        # WAV → text (whisper)
+        model = _find_whisper_model()
+        if not model:
+            return "[no whisper model found]"
+
+        result = subprocess.run(
+            [
+                WHISPER_CLI, "-m", model, "-f", wav_path,
+                "-l", language, "--no-timestamps", "-np",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            return f"[whisper error: {result.stderr[:200]}]"
+
+        return result.stdout.strip()
 
 
 # Singleton
@@ -504,6 +679,76 @@ def wechat_search_messages(query: str, limit: int = 20) -> str:
         t = msg["time"]
         content = msg.get("content", "")[:200]
         lines.append(f"[{t}] {chat}: {content}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def wechat_voice_to_text(
+    contact: str,
+    start_date: str = "",
+    end_date: str = "",
+    limit: int = 5,
+    language: str = "zh",
+) -> str:
+    """Transcribe voice messages from a WeChat chat using local AI (whisper).
+
+    Extracts SILK audio from the WeChat database, converts to WAV, and runs
+    whisper-cli for speech-to-text. Works offline — no cloud APIs.
+
+    Args:
+        contact: Contact name, remark, or WeChat ID.
+        start_date: Start date filter (YYYY-MM-DD). Optional.
+        end_date: End date filter (YYYY-MM-DD). Optional.
+        limit: Max voice messages to transcribe (default 5). Each takes a few seconds.
+        language: Language code for whisper (default "zh"). Use "en" for English, "auto" to auto-detect.
+    """
+    # Resolve contact
+    matches = wechat.resolve_contact(contact)
+    if not matches:
+        return f"No contact found matching '{contact}'"
+    exact = [m for m in matches if contact.lower() in (
+        m["wxid"].lower(),
+        m.get("nickname", "").lower(),
+        m.get("remark", "").lower(),
+    )]
+    target = exact[0] if exact else matches[0]
+    wxid = target["wxid"]
+    display_name = target.get("remark") or target.get("nickname") or wxid
+
+    # Pre-flight checks
+    if not os.path.exists(WHISPER_CLI):
+        return f"whisper-cli not found at {WHISPER_CLI}. Install: brew install whisper-cpp"
+    if not _find_whisper_model():
+        return f"No whisper model found in {WHISPER_MODEL_DIR}. Download one first."
+
+    # Get voice messages
+    voice_msgs = wechat.get_voice_messages(
+        wxid,
+        start_date=start_date or None,
+        end_date=end_date or None,
+        limit=limit,
+    )
+    if not voice_msgs:
+        return f"No voice messages found for {display_name} ({wxid}) in the specified range."
+
+    header = f"Voice transcriptions for {display_name} ({wxid}) — {len(voice_msgs)} messages"
+    if start_date or end_date:
+        header += f" [{start_date or '...'}→{end_date or '...'}]"
+    lines = [header, ""]
+
+    for msg in voice_msgs:
+        svr_id = msg["server_id"]
+        sender = msg["sender"]
+        time_str = msg["time"]
+
+        silk_data = wechat.find_voice_audio(wxid, svr_id)
+        if not silk_data:
+            lines.append(f"[{time_str}] {sender}: [audio not found in DB]")
+            continue
+
+        text = _silk_to_text(silk_data, language=language)
+        lines.append(f"[{time_str}] {sender}: {text}")
 
     return "\n".join(lines)
 
