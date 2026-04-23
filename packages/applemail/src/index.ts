@@ -2,17 +2,17 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
-  getAccounts,
-  listMessages,
-  searchMessages,
-  getMessageMeta,
-  getMessageById,
-  getRecipients,
-  getAttachments,
-  listFolders,
-  findEmlxPath,
+    findEmlxPath,
+    getAccounts,
+    getAttachments,
+    getMessageById,
+    getMessageMeta,
+    getRecipients,
+    listFolders,
+    listMessages,
+    searchMessages,
 } from "./db.js";
-import { parseEmlx, getPlainBody } from "./emlx.js";
+import { getPlainBody, parseEmlx } from "./emlx.js";
 import { sendMail } from "./send.js";
 
 const server = new McpServer({
