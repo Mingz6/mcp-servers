@@ -18,6 +18,7 @@ import re
 import time
 import glob
 import json
+import subprocess
 
 KERN_SUCCESS = 0
 VM_PROT_READ = 1
@@ -250,6 +251,9 @@ def main():
     with open(out_file, 'w') as f:
         json.dump(result, f, indent=2)
     os.chmod(out_file, 0o600)
+    # Strip macOS xattrs (com.apple.provenance) — otherwise Docker Desktop
+    # bind mounts reject the file with EPERM. See packages/wechat/README.md.
+    subprocess.run(["xattr", "-c", out_file], check=False)
     print(f"Keys saved to: {out_file}")
 
     if key_map:
@@ -257,6 +261,7 @@ def main():
         with open("/tmp/wechat_key.txt", 'w') as f:
             f.write(primary_key)
         os.chmod("/tmp/wechat_key.txt", 0o600)
+        subprocess.run(["xattr", "-c", "/tmp/wechat_key.txt"], check=False)
         print(f"Primary key: /tmp/wechat_key.txt")
 
     if missing:
