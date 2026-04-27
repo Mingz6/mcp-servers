@@ -107,21 +107,25 @@ def main():
                 }
 
     # --- Get Name2Id mapping ---
-    msg0_entry = keys.get("message/message_0.db")
-    if not msg0_entry:
-        print("[ERROR] No key for message_0.db")
-        return
-    msg0_db = os.path.join(DB_DIR, "message/message_0.db")
+    # WeChat 4.x may have migrated message_0.db away. Fall back to deriving
+    # the mapping directly from contact wxids (Msg_{md5(wxid)} -> wxid).
     name2id = {}
-    for r in query(msg0_db, msg0_entry["enc_key"], "SELECT user_name FROM Name2Id;"):
-        un = r.get("user_name", "")
-        if un:
-            name2id[f"Msg_{hashlib.md5(un.encode()).hexdigest()}"] = un
-    print(f"Name2Id: {len(name2id)} contacts/groups")
+    msg0_entry = keys.get("message/message_0.db")
+    if msg0_entry:
+        msg0_db = os.path.join(DB_DIR, "message/message_0.db")
+        for r in query(msg0_db, msg0_entry["enc_key"], "SELECT user_name FROM Name2Id;"):
+            un = r.get("user_name", "")
+            if un:
+                name2id[f"Msg_{hashlib.md5(un.encode()).hexdigest()}"] = un
+        print(f"Name2Id: {len(name2id)} contacts/groups (from message_0.db)")
+    else:
+        for wxid in contacts.keys():
+            name2id[f"Msg_{hashlib.md5(wxid.encode()).hexdigest()}"] = wxid
+        print(f"Name2Id: {len(name2id)} contacts (derived from contact wxids — message_0.db missing)")
 
     # --- Export messages ---
     all_messages = {}
-    for i in range(11):
+    for i in range(20):
         db_name = f"message/message_{i}.db"
         entry = keys.get(db_name)
         if not entry:

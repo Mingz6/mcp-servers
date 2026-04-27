@@ -194,21 +194,31 @@ class WeChat:
         return self._contacts
 
     def load_name2id(self) -> tuple[dict, dict]:
-        """Load Name2Id mapping from message_0.db. Returns (table→wxid, wxid→table)."""
+        """Load Name2Id mapping. Returns (table→wxid, wxid→table).
+
+        Tries message_0.db first; if missing (WeChat 4.x migration), derives
+        the mapping from contact wxids directly.
+        """
         if self._name2id is not None:
             return self._name2id, self._id2name
         self._name2id = {}
         self._id2name = {}
-        rows = self._query(
-            "message/message_0.db",
-            "SELECT user_name FROM Name2Id;",
-        )
-        for r in rows:
-            un = r.get("user_name", "")
-            if un:
-                table = f"Msg_{hashlib.md5(un.encode()).hexdigest()}"
-                self._name2id[table] = un
-                self._id2name[un] = table
+        if self.keys.get("message/message_0.db"):
+            rows = self._query(
+                "message/message_0.db",
+                "SELECT user_name FROM Name2Id;",
+            )
+            for r in rows:
+                un = r.get("user_name", "")
+                if un:
+                    table = f"Msg_{hashlib.md5(un.encode()).hexdigest()}"
+                    self._name2id[table] = un
+                    self._id2name[un] = table
+        if not self._name2id:
+            for wxid in self.load_contacts().keys():
+                table = f"Msg_{hashlib.md5(wxid.encode()).hexdigest()}"
+                self._name2id[table] = wxid
+                self._id2name[wxid] = table
         logger.info(f"Name2Id: {len(self._name2id)} mappings")
         return self._name2id, self._id2name
 
@@ -234,17 +244,18 @@ class WeChat:
         info = contacts.get(wxid, {})
         return info.get("remark") or info.get("nickname") or wxid
 
-    def find_chat_db(self, wxid: str) -> Optional[tuple[str, str]]:
-        """Find which message DB and table holds this contact's chat.
-        Returns (db_rel_path, table_name) or None.
+    def find_chat_dbs(self, wxid: str) -> list[tuple[str, str]]:
+        """Find ALL message DBs that hold this contact's chat.
+        WeChat 4.x splits chats across multiple DBs by time, so a single chat
+        can have rows in message_1.db AND message_11.db, etc.
+        Returns list of (db_rel_path, table_name).
         """
         _, id2name = self.load_name2id()
         table = id2name.get(wxid)
         if not table:
-            # Fallback: compute MD5 hash of wxid directly
             table = f"Msg_{hashlib.md5(wxid.encode()).hexdigest()}"
-        # Table could be in any message_N.db — check each
-        for i in range(11):
+        matches = []
+        for i in range(20):
             db_rel = f"message/message_{i}.db"
             entry = self.keys.get(db_rel)
             if not entry:
@@ -254,8 +265,13 @@ class WeChat:
                 f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}';",
             )
             if tables:
-                return db_rel, table
-        return None
+                matches.append((db_rel, table))
+        return matches
+
+    def find_chat_db(self, wxid: str) -> Optional[tuple[str, str]]:
+        """Backward-compat: return the first matching DB."""
+        matches = self.find_chat_dbs(wxid)
+        return matches[0] if matches else None
 
     def query_messages(
         self,
@@ -265,11 +281,10 @@ class WeChat:
         limit: int = 50,
         text_only: bool = False,
     ) -> list[dict]:
-        """Query messages for a specific contact/group."""
-        result = self.find_chat_db(wxid)
-        if not result:
+        """Query messages for a specific contact/group across all DBs."""
+        matches = self.find_chat_dbs(wxid)
+        if not matches:
             return []
-        db_rel, table = result
 
         where_parts = []
         if start_date:
@@ -285,14 +300,20 @@ class WeChat:
 
         where = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
-        sql = (
-            f"SELECT local_id, create_time, local_type, real_sender_id, status, "
-            f"hex(message_content) as hex_content, WCDB_CT_message_content as ct "
-            f"FROM {table}{where} ORDER BY create_time DESC LIMIT {limit};"
-        )
-        rows = self._query(db_rel, sql)
+        all_rows = []
+        for db_rel, table in matches:
+            sql = (
+                f"SELECT local_id, create_time, local_type, real_sender_id, status, "
+                f"hex(message_content) as hex_content, WCDB_CT_message_content as ct "
+                f"FROM {table}{where} ORDER BY create_time DESC LIMIT {limit};"
+            )
+            all_rows.extend(self._query(db_rel, sql))
+
+        all_rows.sort(key=lambda r: int(r.get("create_time", 0) or 0), reverse=True)
+        all_rows = all_rows[:limit]
+
         messages = []
-        for row in rows:
+        for row in all_rows:
             raw_type = row.get("local_type", "")
             try:
                 type_key = str(int(raw_type) & 0xFFFF) if raw_type else ""
@@ -313,7 +334,7 @@ class WeChat:
         name2id, _ = self.load_name2id()
         results = []
 
-        for i in range(11):
+        for i in range(20):
             if len(results) >= limit:
                 break
             db_rel = f"message/message_{i}.db"
@@ -801,7 +822,7 @@ def wechat_recent_activity(days: int = 7, limit: int = 20) -> str:
 
     chat_activity: dict[str, dict] = {}
 
-    for i in range(11):
+    for i in range(20):
         db_rel = f"message/message_{i}.db"
         entry = wechat.keys.get(db_rel)
         if not entry:
