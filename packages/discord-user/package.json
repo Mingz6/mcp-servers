@@ -1,0 +1,23 @@
+{
+  "name": "mcp-discord-user",
+  "version": "1.0.0",
+  "description": "Read-only Discord MCP via user token. Drafts replies only \u2014 never sends. Ported from olivier-motium/discord-user-mcp (see ATTRIBUTIONS.md).",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
