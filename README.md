@@ -8,6 +8,7 @@ All MCP servers in one place — custom and third-party. VS Code's `mcp.json` po
 |--------|------|-------------|---------------|
 | [teams-chat](packages/teams-chat/) | Custom (Node) | Read/send Teams messages, extract PR links | Standup, PR review requests, colleague replies |
 | [outlook](packages/outlook/) | Custom (Node) | Read Outlook emails, search, mark read | Email triage during standup, PO reply detection |
+| [brain-mcp](packages/brain-mcp/) | Custom (Node) | Search/read/link/update `~/code/brain` Markdown wiki | Agent-readable knowledge layer for Copilot and Claude Code |
 | [wechat](packages/wechat/) | Custom (Python) | Query WeChat chats, search messages (read-only) | Family/personal chat access from Copilot |
 | flywheel *(planned)* | Custom (Node) | Track reference repos, check updates, scout for new patterns | Daily self-improvement loop — knowledge aggregator for `/flywheel` skill |
 | awesome-copilot | Third-party (Docker) | Microsoft MCP .NET sample — copilot instructions search | Load custom copilot instructions dynamically |
@@ -21,6 +22,8 @@ mcp-servers/
 │   ├── teams-chat/    # Custom — MS Teams via Graph API
 │   │   └── run.sh     # Wrapper: loads nvm → exec node dist/index.js
 │   ├── outlook/       # Custom — Outlook via Graph API
+│   │   └── run.sh     # Wrapper: loads nvm → exec node dist/index.js
+│   ├── brain-mcp/     # Custom — local brain Markdown wiki API
 │   │   └── run.sh     # Wrapper: loads nvm → exec node dist/index.js
 │   ├── wechat/        # Custom — WeChat via SQLCipher (read-only)
 │   │   └── run.sh     # Wrapper: activates .venv → exec python mcp_server.py
@@ -64,6 +67,13 @@ Each custom server uses a `run.sh` wrapper — no hardcoded Python/Node paths:
         "wechat": {
             "type": "stdio",
             "command": "${userHome}/code/personal/mcp-servers/packages/wechat/run.sh"
+        },
+        "brain": {
+            "type": "stdio",
+            "command": "${userHome}/code/personal/mcp-servers/packages/brain-mcp/run.sh",
+            "env": {
+                "BRAIN_MCP_ROOT": "${userHome}/code/brain"
+            }
         }
     }
 }
@@ -90,6 +100,7 @@ Node/Python versions won't break your MCP config.
 |--------|---------------|
 | teams-chat | `cd packages/teams-chat && npm update && npm run build` |
 | outlook | `cd packages/outlook && npm update && npm run build` |
+| brain-mcp | `cd packages/brain-mcp && npm update && npm run build` |
 | wechat | `cd packages/wechat && .venv/bin/pip install --upgrade "mcp[cli]"` |
 | awesome-copilot | Update the Docker image SHA in `mcp.json` |
 | context7 | Automatic — `npx -y @upstash/context7-mcp` always pulls latest |
