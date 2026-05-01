@@ -4,6 +4,9 @@
   "description": "MCP server for searching, reading, linking, and safely updating the local brain Markdown wiki",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "brain-lint": "dist/cli.js"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
