@@ -8,9 +8,13 @@ import {
     createBrainPage,
     findBacklinks,
     getBrainRoot,
+    lintBrain,
+    linkSourceCitations,
+    packContext,
     readBrainPage,
     replaceBrainText,
     searchBrain,
+    validatePageLinks,
 } from "./brain.js";
 
 const brainRoot = getBrainRoot();
@@ -133,11 +137,30 @@ server.tool(
   {
     path: z.string().describe("Brain-relative Markdown path to create."),
     content: z.string().describe("Full Markdown content to write."),
+    validateCitations: z.boolean().default(false).describe("Reject the write if any internal link does not resolve."),
+    linkSources: z.boolean().default(false).describe("After write, append the new page to wiki_pages: in any cited learning/sources/* page."),
   },
-  async ({ path, content }) => {
+  async ({ path, content, validateCitations, linkSources }) => {
     try {
+      if (validateCitations) {
+        const broken = await validatePageLinks(brainRoot, path, { content });
+        if (broken.length > 0) {
+          return toolError(
+            new Error(
+              `Refusing to create ${path}: ${broken.length} unresolved link(s): ${broken
+                .map((b) => b.rawTarget)
+                .join(", ")}`
+            )
+          );
+        }
+      }
       const result = await createBrainPage(brainRoot, path, content);
-      return textResult(`Created ${result.path} (${result.bytes} bytes).`);
+      let suffix = "";
+      if (linkSources) {
+        const linked = await linkSourceCitations(brainRoot, result.path);
+        suffix = ` Linked sources: ${linked.updated.length} updated of ${linked.cited.length} cited.`;
+      }
+      return textResult(`Created ${result.path} (${result.bytes} bytes).${suffix}`);
     } catch (err) {
       return toolError(err);
     }
@@ -151,11 +174,38 @@ server.tool(
     path: z.string().describe("Brain-relative Markdown path to edit."),
     oldText: z.string().describe("Exact text to replace. Must appear exactly once."),
     newText: z.string().describe("Replacement text."),
+    validateCitations: z.boolean().default(false).describe("Reject the edit if it would introduce unresolved internal links."),
+    linkSources: z.boolean().default(false).describe("After edit, append this page to wiki_pages: in any cited learning/sources/* page."),
   },
-  async ({ path, oldText, newText }) => {
+  async ({ path, oldText, newText, validateCitations, linkSources }) => {
     try {
+      if (validateCitations) {
+        const { promises: fs } = await import("node:fs");
+        const { resolveBrainPath } = await import("./brain.js");
+        const absolutePath = resolveBrainPath(brainRoot, path);
+        const current = await fs.readFile(absolutePath, "utf8");
+        if (!current.includes(oldText)) {
+          return toolError(new Error("oldText not found in page; cannot validate"));
+        }
+        const projected = current.replace(oldText, newText);
+        const broken = await validatePageLinks(brainRoot, path, { content: projected });
+        if (broken.length > 0) {
+          return toolError(
+            new Error(
+              `Refusing to edit ${path}: ${broken.length} unresolved link(s) after edit: ${broken
+                .map((b) => b.rawTarget)
+                .join(", ")}`
+            )
+          );
+        }
+      }
       const result = await replaceBrainText(brainRoot, path, oldText, newText);
-      return textResult(`Updated ${result.path}; replacements: ${result.replacements}.`);
+      let suffix = "";
+      if (linkSources) {
+        const linked = await linkSourceCitations(brainRoot, result.path);
+        suffix = ` Linked sources: ${linked.updated.length} updated of ${linked.cited.length} cited.`;
+      }
+      return textResult(`Updated ${result.path}; replacements: ${result.replacements}.${suffix}`);
     } catch (err) {
       return toolError(err);
     }
@@ -176,6 +226,99 @@ server.tool(
     try {
       const result = await captureSource(brainRoot, { title, source, summary, tags, targetDir });
       return textResult(`Captured source at ${result.path} (${result.bytes} bytes).`);
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "brain_lint",
+  "Lint the brain wiki: orphan pages, broken wikilinks/markdown links, missing H1 headings, and source pages cited without wiki_pages: frontmatter. Pass paths to scope to specific files; useful for pre-commit hooks.",
+  {
+    paths: z.array(z.string()).optional().describe("Optional brain-relative paths to lint. Omit to scan everything."),
+    kinds: z
+      .array(z.enum(["orphan", "broken-link", "missing-title", "missing-source-frontmatter"]))
+      .optional()
+      .describe("Filter to specific issue kinds."),
+    includeArchived: z.boolean().default(false).describe("Include _done/archive folders."),
+    limit: z.number().min(1).max(500).default(100).describe("Maximum issues to display."),
+  },
+  async ({ paths, kinds, includeArchived, limit }) => {
+    try {
+      const report = await lintBrain(brainRoot, { paths, kinds, includeArchived });
+      if (report.issues.length === 0) {
+        return textResult(`Lint clean. Scanned ${report.scanned} page(s).`);
+      }
+      const shown = report.issues.slice(0, limit);
+      const lines = shown.map(
+        (issue, index) => `${index + 1}. [${issue.kind}] ${issue.path} — ${issue.detail}`
+      );
+      const summary = `Lint found ${report.issues.length} issue(s) across ${report.scanned} page(s).`;
+      const truncatedNote =
+        report.issues.length > shown.length
+          ? `\n\n[Showing first ${shown.length}; ${report.issues.length - shown.length} more truncated.]`
+          : "";
+      return textResult(`${summary}\n\n${lines.join("\n")}${truncatedNote}`);
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "brain_link_source",
+  "After a wiki page cites raw sources, add the wiki page path to each source's wiki_pages: frontmatter (bidirectional backlinks).",
+  {
+    path: z.string().describe("Brain-relative wiki page that cites raw sources."),
+    sourceRoots: z
+      .array(z.string())
+      .optional()
+      .describe("Override which folders count as raw sources. Defaults to learning/sources/, learning/, docs/chat-summaries/."),
+  },
+  async ({ path, sourceRoots }) => {
+    try {
+      const result = await linkSourceCitations(brainRoot, path, { sourceRoots });
+      if (result.cited.length === 0) {
+        return textResult(`No source citations found in ${path}.`);
+      }
+      const updatedList = result.updated.length
+        ? result.updated.map((p) => `  - ${p}`).join("\n")
+        : "  (all already linked)";
+      return textResult(
+        `${path} cites ${result.cited.length} source(s); updated frontmatter on ${result.updated.length}:\n${updatedList}`
+      );
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "brain_context_pack",
+  "Build a token-budgeted evidence bundle for an agent kickoff. BFS the link graph from seedPaths or top search hits, ranks by hops then degree, and packs pages until the budget fills.",
+  {
+    seedPaths: z.array(z.string()).optional().describe("Brain-relative paths to seed the graph walk."),
+    query: z.string().optional().describe("Optional search query whose top 5 hits seed the walk."),
+    budgetTokens: z.number().min(500).max(64000).default(4000).describe("Token budget (estimated at 4 chars/token)."),
+    maxHops: z.number().min(0).max(5).default(2).describe("Maximum BFS depth from seeds."),
+    includeArchived: z.boolean().default(false).describe("Include _done/archive folders."),
+  },
+  async ({ seedPaths, query, budgetTokens, maxHops, includeArchived }) => {
+    try {
+      const pack = await packContext(brainRoot, {
+        seedPaths,
+        query,
+        budgetTokens,
+        maxHops,
+        includeArchived,
+      });
+      const header = `Context pack | seeds: ${pack.seed.join(", ")} | budget: ${pack.budgetTokens}t | used: ${pack.usedTokens}t | pages: ${pack.pages.length}`;
+      const sections = pack.pages.map(
+        (page) =>
+          `\n--- [hop ${page.hops} | ~${page.estimatedTokens}t] ${page.path} | ${page.title} ---\n${page.content}`
+      );
+      return textResult(`${header}\n${sections.join("\n")}`);
     } catch (err) {
       return toolError(err);
     }
