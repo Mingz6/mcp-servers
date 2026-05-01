@@ -1,7 +1,12 @@
 node_modules/
 dist/
 .env
+.env.*
+**/.env
+**/.env.*
 .DS_Store
 .venv/
+**/.venv/
 __pycache__/
+**/__pycache__/
 *.pyc
