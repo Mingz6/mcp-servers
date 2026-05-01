@@ -357,6 +357,402 @@ export async function captureSource(
   return createBrainPage(root, relativePath, content);
 }
 
+// ---------- LINT ----------
+
+export type BrainLintIssueKind =
+  | "orphan"
+  | "broken-link"
+  | "missing-title"
+  | "missing-source-frontmatter";
+
+export type BrainLintIssue = Readonly<{
+  kind: BrainLintIssueKind;
+  path: string;
+  detail: string;
+}>;
+
+export type BrainLintReport = Readonly<{
+  scanned: number;
+  issues: ReadonlyArray<BrainLintIssue>;
+}>;
+
+const ORPHAN_EXEMPT_PATTERNS: ReadonlyArray<RegExp> = [
+  /(^|\/)README\.md$/i,
+  /(^|\/)_?index\.md$/i,
+  /(^|\/)wiki-log\.md$/i,
+  /(^|\/)docs\/learning-log\.md$/i,
+  /^life-scan-log\//,
+  /^copilot\/(memories|delegate|colleagues|flywheel-log|repo-templates|crna|advisors|hooks)\//,
+  /^learning\/sources\//,
+  /^learning\//,
+  /^family\//,
+  /^crna\//,
+];
+
+function isOrphanExempt(relativePath: string): boolean {
+  return ORPHAN_EXEMPT_PATTERNS.some((pattern) => pattern.test(relativePath));
+}
+
+export async function lintBrain(
+  root: string,
+  options: Readonly<{
+    includeArchived?: boolean;
+    paths?: ReadonlyArray<string>;
+    kinds?: ReadonlyArray<BrainLintIssueKind>;
+  }> = {}
+): Promise<BrainLintReport> {
+  const rootPath = path.resolve(root);
+  const allFiles = await listMarkdownFiles(rootPath, { includeArchived: options.includeArchived });
+  const lookup = buildMarkdownLookup(allFiles);
+  const inboundCount = new Map<string, number>();
+  const issues: BrainLintIssue[] = [];
+  const kindFilter = options.kinds && options.kinds.length ? new Set(options.kinds) : null;
+
+  for (const file of allFiles) {
+    const content = await fs.readFile(file.absolutePath, "utf8");
+    for (const link of extractLinks(content, file.relativePath, lookup)) {
+      if (link.to) {
+        inboundCount.set(link.to, (inboundCount.get(link.to) || 0) + 1);
+      }
+    }
+  }
+
+  const filterSet = options.paths && options.paths.length
+    ? new Set(
+        options.paths.map((targetPath) =>
+          toBrainRelative(rootPath, resolveBrainPath(rootPath, targetPath))
+        )
+      )
+    : null;
+
+  const targetFiles = filterSet
+    ? allFiles.filter((file) => filterSet.has(file.relativePath))
+    : allFiles;
+
+  function pushIssue(issue: BrainLintIssue): void {
+    if (!kindFilter || kindFilter.has(issue.kind)) {
+      issues.push(issue);
+    }
+  }
+
+  for (const file of targetFiles) {
+    const content = await fs.readFile(file.absolutePath, "utf8");
+
+    if (!/^#\s+\S/m.test(content)) {
+      pushIssue({ kind: "missing-title", path: file.relativePath, detail: "No # heading found" });
+    }
+
+    for (const link of extractLinks(content, file.relativePath, lookup)) {
+      if (
+        link.to === null &&
+        link.rawTarget &&
+        !isExternalTarget(link.rawTarget) &&
+        isMarkdownLikeTarget(link.rawTarget)
+      ) {
+        pushIssue({
+          kind: "broken-link",
+          path: file.relativePath,
+          detail: `${link.type} link "${link.rawTarget}" does not resolve`,
+        });
+      }
+    }
+
+    const inbound = inboundCount.get(file.relativePath) || 0;
+    if (inbound === 0 && !isOrphanExempt(file.relativePath)) {
+      pushIssue({ kind: "orphan", path: file.relativePath, detail: "No inbound links" });
+    }
+
+    const frontmatter = parseSimpleFrontmatter(content);
+    if (
+      frontmatter &&
+      frontmatter.type === "source" &&
+      inbound > 0 &&
+      !("wiki_pages" in frontmatter)
+    ) {
+      pushIssue({
+        kind: "missing-source-frontmatter",
+        path: file.relativePath,
+        detail: `Cited by ${inbound} page(s) but no wiki_pages: list`,
+      });
+    }
+  }
+
+  return { scanned: targetFiles.length, issues };
+}
+
+// ---------- VALIDATE PAGE LINKS ----------
+
+export type BrainBrokenLink = Readonly<{
+  rawTarget: string;
+  text: string;
+  type: "markdown" | "wiki";
+}>;
+
+export async function validatePageLinks(
+  root: string,
+  inputPath: string,
+  options: Readonly<{ content?: string; includeArchived?: boolean }> = {}
+): Promise<ReadonlyArray<BrainBrokenLink>> {
+  const rootPath = path.resolve(root);
+  const absolutePath = resolveBrainPath(rootPath, inputPath);
+  ensureMarkdownPath(absolutePath);
+  const relativePath = toBrainRelative(rootPath, absolutePath);
+  const pageContent = options.content ?? (await fs.readFile(absolutePath, "utf8"));
+  const files = await listMarkdownFiles(rootPath, { includeArchived: options.includeArchived });
+  const lookup = buildMarkdownLookup(files);
+  const broken: BrainBrokenLink[] = [];
+
+  for (const link of extractLinks(pageContent, relativePath, lookup)) {
+    if (
+      link.to === null &&
+      link.rawTarget &&
+      !isExternalTarget(link.rawTarget) &&
+      isMarkdownLikeTarget(link.rawTarget)
+    ) {
+      broken.push({ rawTarget: link.rawTarget, text: link.text, type: link.type });
+    }
+  }
+
+  return broken;
+}
+
+// ---------- LINK SOURCE (bidirectional backlinks) ----------
+
+export async function linkSourceCitations(
+  root: string,
+  inputPath: string,
+  options: Readonly<{
+    sourceRoots?: ReadonlyArray<string>;
+    includeArchived?: boolean;
+  }> = {}
+): Promise<Readonly<{ updated: ReadonlyArray<string>; cited: ReadonlyArray<string> }>> {
+  const rootPath = path.resolve(root);
+  const absolutePath = resolveBrainPath(rootPath, inputPath);
+  ensureMarkdownPath(absolutePath);
+  const relativePath = toBrainRelative(rootPath, absolutePath);
+  const pageContent = await fs.readFile(absolutePath, "utf8");
+  const files = await listMarkdownFiles(rootPath, { includeArchived: options.includeArchived });
+  const lookup = buildMarkdownLookup(files);
+  const sourceRoots = options.sourceRoots && options.sourceRoots.length
+    ? options.sourceRoots
+    : ["learning/sources/", "learning/", "docs/chat-summaries/"];
+
+  const cited = new Set<string>();
+  for (const link of extractLinks(pageContent, relativePath, lookup)) {
+    if (link.to && sourceRoots.some((sourceRoot) => link.to!.startsWith(sourceRoot))) {
+      cited.add(link.to);
+    }
+  }
+
+  const updated: string[] = [];
+  for (const sourceRelativePath of cited) {
+    const sourceAbsolutePath = path.join(rootPath, sourceRelativePath);
+    if (!(await exists(sourceAbsolutePath))) {
+      continue;
+    }
+    const sourceContent = await fs.readFile(sourceAbsolutePath, "utf8");
+    const updatedContent = upsertWikiPageInFrontmatter(sourceContent, relativePath);
+    if (updatedContent !== sourceContent) {
+      await fs.writeFile(sourceAbsolutePath, updatedContent, "utf8");
+      updated.push(sourceRelativePath);
+    }
+  }
+
+  return { updated, cited: [...cited] };
+}
+
+function upsertWikiPageInFrontmatter(content: string, wikiPagePath: string): string {
+  const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (!frontmatterMatch) {
+    return `---\nwiki_pages:\n  - ${wikiPagePath}\n---\n\n${content}`;
+  }
+
+  const frontmatterBody = frontmatterMatch[1] || "";
+  const wikiPagesMatch = frontmatterBody.match(
+    /^wiki_pages:[ \t]*(\[[^\]]*\])[ \t]*$|^wiki_pages:[ \t]*\n((?:[ \t]+-[ \t]+[^\n]+\n?)+)/m
+  );
+
+  if (!wikiPagesMatch) {
+    const newFrontmatterBody = `${frontmatterBody.replace(/\n*$/, "")}\nwiki_pages:\n  - ${wikiPagePath}`;
+    return content.replace(frontmatterMatch[0], `---\n${newFrontmatterBody}\n---\n`);
+  }
+
+  const inlineList = wikiPagesMatch[1];
+  const blockList = wikiPagesMatch[2];
+
+  if (inlineList) {
+    if (inlineList.includes(wikiPagePath)) {
+      return content;
+    }
+    const inner = inlineList.slice(1, -1).trim();
+    const newInline = inner
+      ? `[${inner}, ${quoteYaml(wikiPagePath)}]`
+      : `[${quoteYaml(wikiPagePath)}]`;
+    return content.replace(inlineList, newInline);
+  }
+
+  if (blockList && blockList.includes(wikiPagePath)) {
+    return content;
+  }
+
+  const newBlock = `${(blockList || "").replace(/\n*$/, "")}\n  - ${wikiPagePath}\n`;
+  return content.replace(blockList || "", newBlock);
+}
+
+function parseSimpleFrontmatter(content: string): Record<string, string> | null {
+  const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!frontmatterMatch) {
+    return null;
+  }
+
+  const result: Record<string, string> = {};
+  for (const line of (frontmatterMatch[1] || "").split("\n")) {
+    const fieldMatch = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
+    if (fieldMatch && fieldMatch[1]) {
+      result[fieldMatch[1]] = (fieldMatch[2] || "").trim();
+    }
+  }
+  return result;
+}
+
+// ---------- CONTEXT PACK ----------
+
+export type BrainContextPackPage = Readonly<{
+  path: string;
+  title: string;
+  hops: number;
+  estimatedTokens: number;
+  content: string;
+}>;
+
+export type BrainContextPack = Readonly<{
+  seed: ReadonlyArray<string>;
+  budgetTokens: number;
+  usedTokens: number;
+  pages: ReadonlyArray<BrainContextPackPage>;
+}>;
+
+const CHARS_PER_TOKEN = 4;
+
+export async function packContext(
+  root: string,
+  options: Readonly<{
+    seedPaths?: ReadonlyArray<string>;
+    query?: string;
+    budgetTokens?: number;
+    maxHops?: number;
+    includeArchived?: boolean;
+  }>
+): Promise<BrainContextPack> {
+  const rootPath = path.resolve(root);
+  const budget = Math.max(500, Math.min(options.budgetTokens ?? 4000, 64000));
+  const maxHops = Math.max(0, Math.min(options.maxHops ?? 2, 5));
+  const seeds: string[] = [];
+
+  if (options.seedPaths) {
+    for (const seedPath of options.seedPaths) {
+      const relative = toBrainRelative(rootPath, resolveBrainPath(rootPath, seedPath));
+      if (!seeds.includes(relative)) {
+        seeds.push(relative);
+      }
+    }
+  }
+
+  if (options.query) {
+    const hits = await searchBrain(rootPath, options.query, {
+      limit: 5,
+      includeArchived: options.includeArchived,
+    });
+    for (const hit of hits) {
+      if (!seeds.includes(hit.path)) {
+        seeds.push(hit.path);
+      }
+    }
+  }
+
+  if (seeds.length === 0) {
+    throw new Error("packContext requires seedPaths or query");
+  }
+
+  const files = await listMarkdownFiles(rootPath, { includeArchived: options.includeArchived });
+  const lookup = buildMarkdownLookup(files);
+  const adjacency = new Map<string, Set<string>>();
+
+  for (const file of files) {
+    const content = await fs.readFile(file.absolutePath, "utf8");
+    for (const link of extractLinks(content, file.relativePath, lookup)) {
+      if (link.to) {
+        addNeighbor(adjacency, file.relativePath, link.to);
+        addNeighbor(adjacency, link.to, file.relativePath);
+      }
+    }
+  }
+
+  const hopByPath = new Map<string, number>();
+  const queue: Array<Readonly<{ path: string; hops: number }>> = [];
+  for (const seed of seeds) {
+    hopByPath.set(seed, 0);
+    queue.push({ path: seed, hops: 0 });
+  }
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || current.hops >= maxHops) {
+      continue;
+    }
+    for (const neighbor of adjacency.get(current.path) || []) {
+      if (hopByPath.has(neighbor)) {
+        continue;
+      }
+      hopByPath.set(neighbor, current.hops + 1);
+      queue.push({ path: neighbor, hops: current.hops + 1 });
+    }
+  }
+
+  const ordered = [...hopByPath.entries()].sort((left, right) => {
+    if (left[1] !== right[1]) {
+      return left[1] - right[1];
+    }
+    const leftDegree = adjacency.get(left[0])?.size || 0;
+    const rightDegree = adjacency.get(right[0])?.size || 0;
+    if (leftDegree !== rightDegree) {
+      return rightDegree - leftDegree;
+    }
+    return left[0].localeCompare(right[0]);
+  });
+
+  const pages: BrainContextPackPage[] = [];
+  let used = 0;
+
+  for (const [relativePath, hops] of ordered) {
+    const remaining = budget - used;
+    if (remaining <= 50) {
+      break;
+    }
+    const absolutePath = resolveBrainPath(rootPath, relativePath);
+    if (!(await exists(absolutePath))) {
+      continue;
+    }
+    const fullContent = await fs.readFile(absolutePath, "utf8");
+    const charBudget = remaining * CHARS_PER_TOKEN;
+    const sliced = fullContent.length > charBudget ? fullContent.slice(0, charBudget) : fullContent;
+    const tokens = Math.ceil(sliced.length / CHARS_PER_TOKEN);
+    pages.push({
+      path: relativePath,
+      title: extractTitle(fullContent, absolutePath),
+      hops,
+      estimatedTokens: tokens,
+      content: sliced,
+    });
+    used += tokens;
+    if (used >= budget) {
+      break;
+    }
+  }
+
+  return { seed: seeds, budgetTokens: budget, usedTokens: used, pages };
+}
+
 export function extractLinks(
   content: string,
   fromRelativePath: string,
@@ -599,6 +995,15 @@ function cleanRawTarget(rawTarget: string): string {
 
 function isExternalTarget(rawTarget: string): boolean {
   return /^(?:[a-z][a-z0-9+.-]*:|#)/i.test(rawTarget);
+}
+
+function isMarkdownLikeTarget(rawTarget: string): boolean {
+  const stripped = stripAnchor(decodeLinkTarget(rawTarget));
+  if (!stripped || stripped.endsWith("/")) {
+    return false;
+  }
+  const extension = path.posix.extname(stripped).toLowerCase();
+  return extension === "" || extension === ".md";
 }
 
 function stripAnchor(rawTarget: string): string {
