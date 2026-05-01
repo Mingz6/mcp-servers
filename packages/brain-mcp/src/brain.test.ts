@@ -1,18 +1,18 @@
 import { strict as assert } from "node:assert";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
-  buildGraph,
-  captureSource,
-  createBrainPage,
-  ensureMarkdownPath,
-  findBacklinks,
-  readBrainPage,
-  replaceBrainText,
-  resolveBrainPath,
-  searchBrain,
+    buildGraph,
+    captureSource,
+    createBrainPage,
+    ensureMarkdownPath,
+    findBacklinks,
+    readBrainPage,
+    replaceBrainText,
+    resolveBrainPath,
+    searchBrain,
 } from "./brain.js";
 
 async function withBrain<T>(run: (root: string) => Promise<T>): Promise<T> {
