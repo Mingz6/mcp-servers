@@ -9,10 +9,14 @@ import {
     createBrainPage,
     ensureMarkdownPath,
     findBacklinks,
+    lintBrain,
+    linkSourceCitations,
+    packContext,
     readBrainPage,
     replaceBrainText,
     resolveBrainPath,
     searchBrain,
+    validatePageLinks,
 } from "./brain.js";
 
 async function withBrain<T>(run: (root: string) => Promise<T>): Promise<T> {
@@ -128,3 +132,119 @@ test("createBrainPage and captureSource create Markdown inside the root", async 
     assert.match(content, /A source about agent-readable knowledge/);
   });
 });
+
+test("lintBrain finds orphan pages, broken links, and missing titles", async () => {
+  await withBrain(async (root) => {
+    await writeFile(
+      path.join(root, "docs", "orphan.md"),
+      "# Orphan\n\nNobody links here.\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(root, "docs", "broken.md"),
+      "# Broken\n\nLinks to [missing](does-not-exist.md) and [[ghost-page]].\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(root, "docs", "no-title.md"),
+      "Some prose without a heading.\n\nLinks back to [Topic](topic.md).\n",
+      "utf8"
+    );
+    // give orphan an inbound from broken so only no-title and broken stay flagged for orphan
+    const report = await lintBrain(root);
+    const kindsByPath = new Map<string, Set<string>>();
+    for (const issue of report.issues) {
+      const set = kindsByPath.get(issue.path) || new Set<string>();
+      set.add(issue.kind);
+      kindsByPath.set(issue.path, set);
+    }
+    assert.ok(kindsByPath.get("docs/orphan.md")?.has("orphan"));
+    assert.ok(kindsByPath.get("docs/broken.md")?.has("broken-link"));
+    assert.ok(kindsByPath.get("docs/no-title.md")?.has("missing-title"));
+  });
+});
+
+test("lintBrain scopes to paths and kinds", async () => {
+  await withBrain(async (root) => {
+    await writeFile(
+      path.join(root, "docs", "broken.md"),
+      "# Broken\n\n[gone](nope.md)\n",
+      "utf8"
+    );
+    const scoped = await lintBrain(root, {
+      paths: ["docs/broken.md"],
+      kinds: ["broken-link"],
+    });
+    assert.equal(scoped.scanned, 1);
+    assert.ok(scoped.issues.every((issue) => issue.path === "docs/broken.md"));
+    assert.ok(scoped.issues.every((issue) => issue.kind === "broken-link"));
+  });
+});
+
+test("validatePageLinks reports unresolved internal links from candidate content", async () => {
+  await withBrain(async (root) => {
+    const broken = await validatePageLinks(root, "docs/topic.md", {
+      content: "# Topic\n\n[bad](missing.md) and [[also-missing]] and [ok](index.md)\n",
+    });
+    const targets = broken.map((entry) => entry.rawTarget).sort();
+    assert.deepEqual(targets, ["also-missing", "missing.md"]);
+  });
+});
+
+test("linkSourceCitations adds wiki page to source frontmatter once", async () => {
+  await withBrain(async (root) => {
+    await mkdir(path.join(root, "learning", "sources"), { recursive: true });
+    await writeFile(
+      path.join(root, "learning", "sources", "2026-01-01-foo.md"),
+      "---\ntype: source\nstatus: draft\n---\n\n# Foo\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(root, "docs", "uses-foo.md"),
+      "# Uses Foo\n\nSee [foo](../learning/sources/2026-01-01-foo.md).\n",
+      "utf8"
+    );
+
+    const first = await linkSourceCitations(root, "docs/uses-foo.md");
+    assert.deepEqual([...first.cited], ["learning/sources/2026-01-01-foo.md"]);
+    assert.deepEqual([...first.updated], ["learning/sources/2026-01-01-foo.md"]);
+
+    const sourceContent = await readFile(
+      path.join(root, "learning", "sources", "2026-01-01-foo.md"),
+      "utf8"
+    );
+    assert.match(sourceContent, /wiki_pages:\n\s+- docs\/uses-foo\.md/);
+
+    const second = await linkSourceCitations(root, "docs/uses-foo.md");
+    assert.equal(second.updated.length, 0);
+  });
+});
+
+test("packContext walks the graph and respects the token budget", async () => {
+  await withBrain(async (root) => {
+    const pack = await packContext(root, {
+      seedPaths: ["docs/topic.md"],
+      budgetTokens: 800,
+      maxHops: 2,
+    });
+    assert.ok(pack.pages.length > 0);
+    assert.equal(pack.pages[0]?.path, "docs/topic.md");
+    assert.equal(pack.pages[0]?.hops, 0);
+    assert.ok(pack.usedTokens <= pack.budgetTokens);
+    const paths = pack.pages.map((page) => page.path);
+    assert.ok(paths.includes("docs/index.md"));
+  });
+});
+
+test("packContext can seed from a query when seedPaths is omitted", async () => {
+  await withBrain(async (root) => {
+    const pack = await packContext(root, {
+      query: "agent knowledge",
+      budgetTokens: 1200,
+      maxHops: 1,
+    });
+    assert.ok(pack.seed.includes("docs/topic.md"));
+    assert.ok(pack.pages.some((page) => page.path === "docs/topic.md"));
+  });
+});
+
