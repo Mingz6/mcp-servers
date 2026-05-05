@@ -15,7 +15,11 @@ export interface SendMailOptions {
 }
 
 function escapeAppleScript(str: string): string {
-  return str.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  // AppleScript string literals don't allow raw newlines; convert to \n escape.
+  return str
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\r?\n/g, "\\n");
 }
 
 export function sendMail(options: SendMailOptions): void {

@@ -4,7 +4,8 @@ const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
 async function graphFetch(
   path: string,
-  params?: Record<string, string>
+  params?: Record<string, string>,
+  extraHeaders?: Record<string, string>
 ): Promise<any> {
   const token = await getAccessToken();
   const url = new URL(`${GRAPH_BASE}${path}`);
@@ -15,7 +16,7 @@ async function graphFetch(
   }
 
   const response = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { Authorization: `Bearer ${token}`, ...(extraHeaders ?? {}) },
   });
 
   if (!response.ok) {
@@ -155,7 +156,10 @@ export async function searchMail(
     $search: `"${query}"`,
   };
 
-  const data = await graphFetch("/me/messages", params);
+  // Graph requires ConsistencyLevel: eventual for $search; without it the request 400s.
+  const data = await graphFetch("/me/messages", params, {
+    ConsistencyLevel: "eventual",
+  });
 
   return (data.value || []).map((msg: any) => ({
     id: msg.id,
@@ -208,7 +212,8 @@ export async function listFolderMessages(
   unreadOnly = false
 ): Promise<MailMessage[]> {
   const folders = await graphFetch("/me/mailFolders", {
-    $filter: `displayName eq '${folderName}'`,
+    // OData escapes single quotes by doubling them. Folders like "Mike's stuff" otherwise 400.
+    $filter: `displayName eq '${folderName.replace(/'/g, "''")}'`,
     $select: "id,displayName",
   });
 

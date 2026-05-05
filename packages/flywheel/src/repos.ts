@@ -33,8 +33,15 @@ export async function loadRepos(): Promise<ReposData> {
   try {
     const raw = await readFile(REPOS_FILE, "utf-8");
     return JSON.parse(raw) as ReposData;
-  } catch {
-    return { repos: [] };
+  } catch (err) {
+    // First run: file doesn't exist yet — start with empty list.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { repos: [] };
+    // Anything else (parse error, permission, IO) is a real problem.
+    // Returning {repos:[]} here would cause the next saveRepos() to wipe the file.
+    throw new Error(
+      `Failed to read ${REPOS_FILE}: ${(err as Error).message}. ` +
+        `Fix or move the file before adding/removing repos to avoid data loss.`
+    );
   }
 }
 
