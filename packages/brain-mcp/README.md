@@ -13,6 +13,9 @@ Local MCP server for `~/code/brain`. It gives Copilot, Claude Code, and other ag
 | `brain_create_page` | Create a new Markdown page inside the brain root. |
 | `brain_replace_text` | Replace one exact text block in a page. |
 | `brain_capture_source` | Capture an external or local source into `learning/sources/`. |
+| `brain_lint` | Lint Markdown pages for broken links, frontmatter issues, and structure problems. |
+| `brain_link_source` | Link a captured source into one or more brain pages by adding cross-references. |
+| `brain_context_pack` | Build a context bundle (page + linked sources + backlinks) for an agent task. |
 
 ## Config
 
