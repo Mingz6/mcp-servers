@@ -7,10 +7,13 @@ All MCP servers in one place — custom and third-party. VS Code's `mcp.json` po
 | Server | Type | What it does | Why I need it |
 |--------|------|-------------|---------------|
 | [teams-chat](packages/teams-chat/) | Custom (Node) | Read/send Teams messages, extract PR links | Standup, PR review requests, colleague replies |
-| [outlook](packages/outlook/) | Custom (Node) | Read Outlook emails, search, mark read | Email triage during standup, PO reply detection |
+| [outlook](packages/outlook/) | Custom (Node) | Read/send Outlook mail, search, mark read, attachments | Email triage during standup, PO reply detection |
+| [applemail](packages/applemail/) | Custom (Node) | Read/send via local Apple Mail (SQLite + .emlx, AppleScript) | Personal mail across iCloud/Gmail/work without cloud auth |
+| [imessage](packages/imessage/) | Custom (Python) | Read iMessage/SMS via Messages.app, send via AppleScript | Tenant/family chats |
 | [brain-mcp](packages/brain-mcp/) | Custom (Node) | Search/read/link/update `~/code/brain` Markdown wiki | Agent-readable knowledge layer for Copilot and Claude Code |
-| [wechat](packages/wechat/) | Custom (Python) | Query WeChat chats, search messages (read-only) | Family/personal chat access from Copilot |
-| flywheel *(planned)* | Custom (Node) | Track reference repos, check updates, scout for new patterns | Daily self-improvement loop — knowledge aggregator for `/flywheel` skill |
+| [discord-user](packages/discord-user/) | Custom (Node) | Read Discord servers/DMs via personal user token (read-only) | See community channels the bot can't access |
+| [wechat](packages/wechat/) | Custom (Python) | Query WeChat chats, search messages, voice transcription (read-only) | Family/personal chat access from Copilot |
+| [flywheel](packages/flywheel/) | Custom (Node) | Track reference repos, check updates, scout for new patterns | Daily self-improvement loop — knowledge aggregator for `/flywheel` skill |
 | awesome-copilot | Third-party (Docker) | Microsoft MCP .NET sample — copilot instructions search | Load custom copilot instructions dynamically |
 | context7 | Third-party (npx) | Fetch up-to-date library docs from Upstash | Get current API docs instead of outdated training data |
 
@@ -37,15 +40,15 @@ mcp-servers/
 ## Quick Start
 
 ```bash
-npm install        # installs Node workspaces (teams-chat, outlook)
+npm install        # installs Node workspaces (all *.ts packages)
 npm run build      # builds all Node servers
 ```
 
-For wechat (Python):
+For Python servers (wechat, imessage):
 ```bash
-cd packages/wechat
+cd packages/wechat   # or packages/imessage
 python3 -m venv .venv
-.venv/bin/pip install "mcp[cli]"
+.venv/bin/pip install -r requirements.txt
 ```
 
 ## VS Code Config
