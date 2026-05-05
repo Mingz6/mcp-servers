@@ -95,7 +95,7 @@ def _load_keys() -> dict:
                 return keys
     raise FileNotFoundError(
         "No keys file found. Run extract_key.py first:\n"
-        "  sudo python3 ~/code/brain/scripts/wechat/extract_key.py"
+        "  sudo python3 packages/wechat/extract_key.py"
     )
 
 
@@ -114,6 +114,14 @@ def _sqlcipher_query(db_path: str, key: str, sql: str) -> list[dict]:
         capture_output=True,
         timeout=30,
     )
+    # Surface SQLCipher errors instead of silently returning [] — a wrong key,
+    # missing pragma, or stale snapshot otherwise looks indistinguishable from
+    # "no matching messages" and the caller wastes time chasing ghost data.
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"SQLCipher query failed (rc={result.returncode}) on {db_path}: {stderr[:500]}"
+        )
     text = result.stdout.decode("utf-8", errors="replace").strip()
     if not text:
         return []
@@ -848,11 +856,21 @@ def wechat_recent_activity(days: int = 7, limit: int = 20) -> str:
                 last_ts = int(rows[0].get("last_ts", 0) or 0)
                 cnt = int(rows[0].get("cnt", 0) or 0)
                 if cnt > 0:
-                    chat_activity[wxid] = {
-                        "last_message": _format_time(str(last_ts)),
-                        "last_ts": last_ts,
-                        "message_count": cnt,
-                    }
+                    # Aggregate across shards: a single chat can live in
+                    # message_1.db AND message_11.db, so sum counts and keep
+                    # the most recent last_ts.
+                    existing = chat_activity.get(wxid)
+                    if existing:
+                        existing["message_count"] += cnt
+                        if last_ts > existing["last_ts"]:
+                            existing["last_ts"] = last_ts
+                            existing["last_message"] = _format_time(str(last_ts))
+                    else:
+                        chat_activity[wxid] = {
+                            "last_message": _format_time(str(last_ts)),
+                            "last_ts": last_ts,
+                            "message_count": cnt,
+                        }
 
     if not chat_activity:
         return f"No chat activity in the last {days} days."

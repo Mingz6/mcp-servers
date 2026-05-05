@@ -182,8 +182,14 @@ def _send_applescript(phone: str, text: str, service: str) -> str:
     normalized = _normalize_phone(phone)
     svc_type = "SMS" if service == "SMS" else "iMessage"
 
-    # Escape for AppleScript
-    escaped_text = text.replace("\\", "\\\\").replace('"', '\\"')
+    # Escape for AppleScript. Newlines must be \n escapes — raw line breaks
+    # would terminate the string literal in osascript.
+    escaped_text = (
+        text.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "")
+    )
 
     script = f'''
     tell application "Messages"
