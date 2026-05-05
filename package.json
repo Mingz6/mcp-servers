@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces",
+    "build:applemail": "npm run build -w packages/applemail",
     "build:brain-mcp": "npm run build -w packages/brain-mcp",
     "build:teams-chat": "npm run build -w packages/teams-chat",
     "build:outlook": "npm run build -w packages/outlook",
