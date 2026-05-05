@@ -389,8 +389,18 @@ server.tool(
 // --- Start Server ---
 
 async function main() {
+  // Fail fast on missing required env so we don't surface auth errors mid-tool-call.
+  if (!process.env.GITHUB_TOKEN) {
+    console.error(
+      "[flywheel] GITHUB_TOKEN is not set. Export a token with `public_repo` scope " +
+        "in your shell (.zshrc) or via mcp.json env. See packages/flywheel/README.md."
+    );
+    process.exit(1);
+  }
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  console.error("[flywheel] MCP server ready (8 tools).");
 }
 
 main().catch((err) => {
