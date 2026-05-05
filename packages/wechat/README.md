@@ -1,7 +1,7 @@
 # WeChat Mac — Decrypt, Export & MCP Server
 
 Scripts to extract SQLCipher keys from WeChat's process memory, export chat history,
-and run an MCP server for live chat queries + message sending.
+and run a **read-only** MCP server for live chat queries.
 
 ## Files
 
@@ -9,7 +9,7 @@ and run an MCP server for live chat queries + message sending.
 |------|---------|
 | `extract_key.py` | Extracts encryption keys from WeChat memory (requires sudo) |
 | `export_messages.py` | Batch export all messages/contacts to JSON + Markdown |
-| `mcp_server.py` | MCP server — live chat queries, contact search, send messages |
+| `mcp_server.py` | MCP server — live chat queries, contact search, voice transcription (read-only) |
 
 ## When to Run
 
@@ -55,7 +55,7 @@ Open WeChat and scan the QR code from your phone. Wait until you're fully logged
 ### 3. Extract Keys
 
 ```bash
-sudo python3 ~/code/brain/scripts/wechat/extract_key.py
+sudo python3 extract_key.py
 ```
 
 Output: `/tmp/wechat_keys.json` (all DB keys) and `/tmp/wechat_key.txt` (primary key).
@@ -73,7 +73,7 @@ DB=~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/*/db_
 ### 4. Export Messages
 
 ```bash
-python3 ~/code/brain/scripts/wechat/export_messages.py
+python3 export_messages.py
 ```
 
 Output goes to `~/.wechat-export/` (gitignored):
@@ -106,26 +106,24 @@ cp /tmp/wechat_key.txt ~/.wechat-export/.primary_key.txt
 | Keys don't work after restart | Re-run `extract_key.py` — WCDB regenerates keys on restart |
 | WeChat won't launch after re-sign | Reinstall from wechat.com, then re-sign |
 | `Operation not permitted` | Run with `sudo` |
-
 ## MCP Server
 
 ### Setup (one-time)
 
-The venv is already created at `scripts/wechat/.venv/`.
-If you need to recreate it:
+Create the local venv and install deps:
 
 ```bash
-python3 -m venv ~/code/brain/scripts/wechat/.venv
-~/code/brain/scripts/wechat/.venv/bin/pip install "mcp[cli]"
+cd packages/wechat
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 ```
 
-The MCP config is in `~/Library/Application Support/Code/User/mcp.json` (or `brain/config/vscode/mcp.json`):
+The MCP config wires the local `run.sh` wrapper:
 
 ```json
 "wechat": {
   "type": "stdio",
-  "command": "${userHome}/code/brain/scripts/wechat/.venv/bin/python",
-  "args": ["${userHome}/code/brain/scripts/wechat/mcp_server.py"]
+  "command": "${userHome}/code/personal/mcp-servers/packages/wechat/run.sh"
 }
 ```
 
@@ -137,7 +135,10 @@ The MCP config is in `~/Library/Application Support/Code/User/mcp.json` (or `bra
 | `wechat_search_messages` | Full-text search across all message databases |
 | `wechat_list_contacts` | List/filter contacts by name, remark, or WeChat ID |
 | `wechat_recent_activity` | Show recently active chats (last N days) |
+| `wechat_voice_to_text` | Transcribe a voice message (.silk → wav → whisper) |
 | `wechat_extract_keys` | Re-run key extraction (needs sudo configured for passwordless) |
+
+All tools are read-only — the MCP server cannot send, edit, or delete messages.
 
 ### Key Management
 
@@ -148,7 +149,7 @@ The MCP server looks for keys in this order:
 Keys become stale when WeChat restarts. When queries start failing, re-extract:
 
 ```bash
-sudo python3 ~/code/brain/scripts/wechat/extract_key.py
+sudo python3 extract_key.py
 ```
 
 ---

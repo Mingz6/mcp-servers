@@ -6,7 +6,7 @@
 
 ## Why this exists
 
-The bot-based [`discord`](../discord/) package is officially supported but only sees servers where you can invite the bot. For server channels you don't control, that's not enough. This package fills the gap by reading as you — same access as your Discord client.
+Bot-based Discord MCP servers are officially supported by Discord but only see channels where you can invite the bot — useless for read-only assistant access to your own server channels and DMs. This package fills the gap by reading as you, with the same access as your Discord client.
 
 ## Tools (7, all read-only)
 
@@ -98,9 +98,8 @@ Done. No automated writes, ever.
 - Join servers
 - Do anything that changes server state
 
-If you want write capabilities, use the bot-based [`discord`](../discord/) package and accept that messages will be posted under the bot's name.
+If you want write capabilities, register a Discord bot via the official Developer Portal and accept that messages will post under the bot's name.
 
 ## See also
 
 - [ATTRIBUTIONS.md](./ATTRIBUTIONS.md) — what was borrowed and what was hardened
-- [`../discord/`](../discord/) — bot-based companion (full read/write, but only invited servers)

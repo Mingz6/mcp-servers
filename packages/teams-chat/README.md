@@ -52,10 +52,12 @@ export TEAMS_MCP_TENANT_ID="your-tenant-id"  # or "common" for multi-tenant
 ### 4. Build
 
 ```bash
-cd ~/code/personal/mcp-teams-chat
+cd ~/code/personal/mcp-servers/packages/teams-chat
 npm install
 npm run build
 ```
+
+Or from repo root: `npm run build:teams-chat`.
 
 ### 5. Test Auth
 
@@ -75,8 +77,8 @@ Add to your MCP config (`~/.vscode/mcp.json` or workspace settings).
 {
   "servers": {
     "teams-chat": {
-      "command": "/Users/you/.nvm/versions/node/v22.17.1/bin/node",
-      "args": ["/Users/you/code/personal/mcp-teams-chat/dist/index.js"],
+      "type": "stdio",
+      "command": "${userHome}/code/personal/mcp-servers/packages/teams-chat/run.sh",
       "env": {
         "TEAMS_MCP_CLIENT_ID": "your-client-id",
         "TEAMS_MCP_TENANT_ID": "your-tenant-id"
@@ -85,6 +87,8 @@ Add to your MCP config (`~/.vscode/mcp.json` or workspace settings).
   }
 }
 ```
+
+The `run.sh` wrapper sources nvm so VS Code doesn't need an absolute path to node.
 
 ## Usage in Copilot
 
@@ -100,7 +104,7 @@ Once connected, Copilot can call these tools directly:
 ## Troubleshooting
 
 **"AADSTS65001: The user or administrator has not consented"**
-Your tenant admin needs to grant consent for `Chat.Read`. Ask IT to approve the app, or try with a personal Microsoft account first.
+Your tenant admin needs to grant consent for `Chat.ReadWrite` (or whichever scopes are missing). Ask IT to approve the app, or try with a personal Microsoft account first.
 
 **"AADSTS700016: Application not found"**
 Double-check `TEAMS_MCP_CLIENT_ID` matches your app registration.
