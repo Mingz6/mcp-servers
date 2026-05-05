@@ -11,7 +11,8 @@
     "build:brain-mcp": "npm run build -w packages/brain-mcp",
     "build:teams-chat": "npm run build -w packages/teams-chat",
     "build:outlook": "npm run build -w packages/outlook",
-    "build:discord-user": "npm run build -w packages/discord-user"
+    "build:discord-user": "npm run build -w packages/discord-user",
+    "build:flywheel": "npm run build -w packages/flywheel"
   },
   "engines": {
     "node": ">=18.0.0"
