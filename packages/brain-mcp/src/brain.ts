@@ -26,6 +26,7 @@ export type BrainSearchResult = Readonly<{
   title: string;
   score: number;
   snippet: string;
+  matchType: "keyword" | "semantic" | "both";
 }>;
 
 export type BrainLink = Readonly<{
@@ -165,9 +166,12 @@ export async function searchBrain(
     throw new Error("Search query is required");
   }
 
+  const limit = Math.max(1, Math.min(options.limit ?? DEFAULT_SEARCH_LIMIT, 50));
+
+  // --- Keyword search (existing) ---
   const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
   const files = await listMarkdownFiles(root, options);
-  const results: BrainSearchResult[] = [];
+  const keywordResults: Array<{ path: string; title: string; score: number; snippet: string }> = [];
 
   for (const file of files) {
     const stat = await fs.stat(file.absolutePath);
@@ -185,7 +189,7 @@ export async function searchBrain(
     }
 
     const score = calculateScore(haystack, normalizedQuery, tokens, file.relativePath);
-    results.push({
+    keywordResults.push({
       path: file.relativePath,
       title: extractTitle(content, file.absolutePath),
       score,
@@ -193,10 +197,100 @@ export async function searchBrain(
     });
   }
 
-  const limit = Math.max(1, Math.min(options.limit ?? DEFAULT_SEARCH_LIMIT, 50));
-  return results
-    .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
-    .slice(0, limit);
+  keywordResults.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+
+  // --- Semantic search (when index available) ---
+  const semanticResults = await searchSemantic(query, limit * 2);
+
+  // --- Merge via RRF ---
+  if (semanticResults.length === 0) {
+    return keywordResults.slice(0, limit).map((r) => ({ ...r, matchType: "keyword" as const }));
+  }
+
+  return mergeRRF(keywordResults, semanticResults, limit);
+}
+
+async function searchSemantic(
+  query: string,
+  topK: number
+): Promise<Array<{ path: string; chunkId: string; content: string; distance: number }>> {
+  try {
+    const { isIndexReady, searchIndex } = await import("./hybrid-bridge.js");
+    if (!isIndexReady()) return [];
+    return searchIndex(query, topK);
+  } catch {
+    return [];
+  }
+}
+
+const RRF_K = 60;
+
+function mergeRRF(
+  keywordResults: Array<{ path: string; title: string; score: number; snippet: string }>,
+  semanticResults: Array<{ path: string; chunkId: string; content: string; distance: number }>,
+  limit: number
+): BrainSearchResult[] {
+  const merged = new Map<string, {
+    path: string;
+    title: string;
+    snippet: string;
+    rrfScore: number;
+    matchType: "keyword" | "semantic" | "both";
+  }>();
+
+  for (let rank = 0; rank < keywordResults.length; rank++) {
+    const r = keywordResults[rank];
+    const rrfScore = 1 / (RRF_K + rank + 1);
+    merged.set(r.path, {
+      path: r.path,
+      title: r.title,
+      snippet: r.snippet,
+      rrfScore,
+      matchType: "keyword",
+    });
+  }
+
+  // Deduplicate semantic results by file path (keep best distance)
+  const bestSemantic = new Map<string, { path: string; content: string; distance: number }>();
+  for (const r of semanticResults) {
+    const existing = bestSemantic.get(r.path);
+    if (!existing || r.distance < existing.distance) {
+      bestSemantic.set(r.path, r);
+    }
+  }
+
+  const semanticRanked = [...bestSemantic.values()].sort((a, b) => a.distance - b.distance);
+
+  for (let rank = 0; rank < semanticRanked.length; rank++) {
+    const r = semanticRanked[rank];
+    const rrfScore = 1 / (RRF_K + rank + 1);
+    const existing = merged.get(r.path);
+
+    if (existing) {
+      existing.rrfScore += rrfScore;
+      existing.matchType = "both";
+    } else {
+      const title = r.path.split("/").pop()?.replace(/\.md$/, "") ?? r.path;
+      merged.set(r.path, {
+        path: r.path,
+        title,
+        snippet: r.content.slice(0, 240),
+        rrfScore,
+        matchType: "semantic",
+      });
+    }
+  }
+
+  return [...merged.values()]
+    .sort((a, b) => b.rrfScore - a.rrfScore)
+    .slice(0, limit)
+    .map((r) => ({
+      path: r.path,
+      title: r.title,
+      score: Math.round(r.rrfScore * 10000),
+      snippet: r.snippet,
+      matchType: r.matchType,
+    }));
 }
 
 export async function findBacklinks(

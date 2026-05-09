@@ -66,6 +66,8 @@ test("searchBrain returns ranked Markdown snippets and skips archives by default
     const results = await searchBrain(root, "agent knowledge", { limit: 10 });
     assert.equal(results[0]?.path, "docs/topic.md");
     assert.equal(results.some((result) => result.path === "_done/old.md"), false);
+    // Without index, all results should be keyword-only
+    assert.equal(results[0]?.matchType, "keyword");
 
     const archivedResults = await searchBrain(root, "archived agent", { includeArchived: true });
     assert.equal(archivedResults[0]?.path, "_done/old.md");

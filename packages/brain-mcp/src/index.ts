@@ -16,6 +16,9 @@ import {
     searchBrain,
     validatePageLinks,
 } from "./brain.js";
+import { preflight, verifyCompletion } from "./coupled-actions.js";
+import { indexFull, indexIncremental } from "./indexer.js";
+import { getStats as getIndexStats } from "./vector-store.js";
 
 const brainRoot = getBrainRoot();
 const server = new McpServer({ name: "brain", version: "1.0.0" });
@@ -54,7 +57,7 @@ server.tool(
       const lines = results.map((result, index) => [
         `${index + 1}. ${result.title}`,
         `   Path: ${result.path}`,
-        `   Score: ${result.score}`,
+        `   Score: ${result.score} (${result.matchType})`,
         `   Snippet: ${result.snippet}`,
       ].join("\n"));
 
@@ -319,6 +322,132 @@ server.tool(
           `\n--- [hop ${page.hops} | ~${page.estimatedTokens}t] ${page.path} | ${page.title} ---\n${page.content}`
       );
       return textResult(`${header}\n${sections.join("\n")}`);
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "brain_index",
+  "Build or update the brain vector search index. Use 'full' to rebuild from scratch, 'incremental' to update changed files only, or 'stats' to check index health.",
+  {
+    mode: z.enum(["full", "incremental", "stats"]).describe("Index mode."),
+  },
+  async ({ mode }) => {
+    try {
+      if (mode === "stats") {
+        try {
+          const stats = getIndexStats();
+          return textResult(
+            `Index: ${stats.totalFiles} files, ${stats.totalChunks} chunks, ${(stats.dbSizeBytes / 1024).toFixed(0)} KB, last indexed: ${stats.lastIndexed ?? "never"}`
+          );
+        } catch {
+          return textResult("Index not initialized. Run brain_index with mode 'full' first.");
+        }
+      }
+
+      const messages: string[] = [];
+      const log = (msg: string) => messages.push(msg);
+
+      const result = mode === "full"
+        ? await indexFull(undefined, log)
+        : await indexIncremental(undefined, log);
+
+      const summary = [
+        ...messages,
+        "",
+        `Files processed: ${result.filesProcessed}`,
+        `Chunks upserted: ${result.chunksUpserted}`,
+        `Files deleted: ${result.filesDeleted}`,
+        result.errors.length > 0
+          ? `Errors: ${result.errors.length}\n${result.errors.slice(0, 5).join("\n")}`
+          : "No errors.",
+      ].join("\n");
+
+      return textResult(summary);
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "brain_preflight",
+  "Given a task description, returns relevant coupled actions that must be completed before the task can be marked done. Call this when starting work to know what verification gates apply.",
+  {
+    task: z.string().describe("Description of the task being worked on."),
+  },
+  async ({ task }) => {
+    try {
+      const result = preflight(task);
+      if (result.matchedActions.length === 0) {
+        return textResult("No coupled actions apply to this task.");
+      }
+      const lines = result.matchedActions.map((a) => {
+        const actions = a.actions.map((act) => `    - ${act}`).join("\n");
+        return `[${a.severity.toUpperCase()}] ${a.id}: ${a.description}\n${actions}`;
+      });
+      return textResult(`Coupled actions for this task:\n\n${lines.join("\n\n")}`);
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "brain_verify_completion",
+  "Verify all coupled actions are satisfied before marking a task done. Returns pass/fail with missing items. Hard failures block completion.",
+  {
+    task: z.string().describe("Description of the task being completed."),
+    actions_taken: z.array(z.string()).describe("List of actions that were performed."),
+  },
+  async ({ task, actions_taken }) => {
+    try {
+      const result = verifyCompletion(task, actions_taken);
+      if (result.passed) {
+        return textResult("All coupled actions satisfied. Task can be marked done.");
+      }
+      const lines = result.missing.map((m) => {
+        const missing = m.missingActions.map((a) => `    - ${a}`).join("\n");
+        return `[${m.severity.toUpperCase()}] ${m.id}: ${m.description}\n  Missing:\n${missing}`;
+      });
+      const verdict = result.hardFail
+        ? "BLOCKED — hard-fail coupled actions not satisfied. Complete them before marking done."
+        : "WARNING — soft coupled actions missing. Consider completing them.";
+      return textResult(`${verdict}\n\n${lines.join("\n\n")}`);
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "brain_get_relevant_instructions",
+  "Given a task description, find the most relevant .instructions.md files using semantic search. Returns top matches with their descriptions and file paths so the agent can load them.",
+  {
+    task: z.string().describe("Description of the task or domain to find instructions for."),
+    limit: z.number().optional().default(5).describe("Max number of instructions to return."),
+  },
+  async ({ task, limit }) => {
+    try {
+      const results = await searchBrain(brainRoot, task + " instructions rules standards", {
+        limit: limit * 3,
+      });
+      const instructionResults = results.filter((r) =>
+        r.path.endsWith(".instructions.md") || r.path.includes("/instructions/")
+      );
+      const top = instructionResults.slice(0, limit);
+      if (top.length === 0) {
+        return textResult("No relevant instructions found for this task.");
+      }
+      const lines = top.map((r, i) => [
+        `${i + 1}. ${r.title}`,
+        `   Path: ${r.path}`,
+        `   Match: ${r.matchType}`,
+        `   Snippet: ${r.snippet}`,
+      ].join("\n"));
+      return textResult(`Relevant instructions (${top.length}):\n\n${lines.join("\n\n")}`);
     } catch (err) {
       return toolError(err);
     }
