@@ -29,6 +29,7 @@ import { z } from "zod";
 // ---------------------------------------------------------------------------
 
 const AUTH_DIR = path.join(os.homedir(), ".whatsapp-mcp", "auth");
+const CACHE_FILE = path.join(os.homedir(), ".whatsapp-mcp", "chat-cache.json");
 const logger = P({ level: "silent" });
 
 // ---------------------------------------------------------------------------
@@ -46,6 +47,46 @@ const messageStore = new Map();  // jid -> [messages] (recent N per chat)
 const MAX_MSGS_PER_CHAT = 200;
 
 // ---------------------------------------------------------------------------
+// Disk cache — survives process restarts (Baileys only syncs on QR pairing)
+// ---------------------------------------------------------------------------
+
+let _savePending = null;
+
+function saveCache() {
+  // Debounce — many events fire in quick succession
+  if (_savePending) clearTimeout(_savePending);
+  _savePending = setTimeout(() => {
+    try {
+      const data = {
+        ts: Date.now(),
+        chats: [...chatStore.values()],
+        contacts: [...contactStore.values()],
+      };
+      fs.writeFileSync(CACHE_FILE, JSON.stringify(data), { mode: 0o600 });
+      console.error(`[cache] saved ${data.chats.length} chats, ${data.contacts.length} contacts`);
+    } catch (e) {
+      console.error("[cache] save error:", e.message);
+    }
+  }, 500);
+}
+
+function loadCache() {
+  try {
+    if (!fs.existsSync(CACHE_FILE)) return false;
+    const data = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
+    if (!data.chats?.length) return false;
+    for (const c of data.chats) chatStore.set(c.id, c);
+    for (const c of (data.contacts || [])) contactStore.set(c.id, c);
+    const age = Math.round((Date.now() - (data.ts || 0)) / 60000);
+    console.error(`[cache] loaded ${chatStore.size} chats, ${contactStore.size} contacts (${age}m old)`);
+    return true;
+  } catch (e) {
+    console.error("[cache] load error:", e.message);
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Baileys connection
 // ---------------------------------------------------------------------------
 
@@ -57,6 +98,7 @@ async function connectWhatsApp() {
   if (sock && connectionOpen) return sock;
 
   ensureAuthDir();
+  loadCache();
 
   if (!fs.existsSync(path.join(AUTH_DIR, "creds.json"))) {
     throw new Error(
@@ -94,11 +136,20 @@ async function connectWhatsApp() {
     if (connection === "close") {
       connectionOpen = false;
       const code = (lastDisconnect?.error)?.output?.statusCode;
-      if (code !== DisconnectReason.loggedOut) {
-        console.error("[whatsapp-mcp] Reconnecting...");
-        setTimeout(() => connectWhatsApp().catch(console.error), 3000);
+      if (code === DisconnectReason.loggedOut) {
+        console.error("[whatsapp-mcp] Logged out — session invalidated");
+      } else if (code === 408 || code === 440 || code === 500 || code === 515) {
+        // Transient errors — retry a few times
+        if (!sock._retryCount) sock._retryCount = 0;
+        sock._retryCount++;
+        if (sock._retryCount <= 3) {
+          console.error(`[whatsapp-mcp] Reconnecting (attempt ${sock._retryCount}/3)...`);
+          setTimeout(() => connectWhatsApp().catch(console.error), 3000);
+        } else {
+          console.error("[whatsapp-mcp] Max retries reached, giving up");
+        }
       } else {
-        console.error("[whatsapp-mcp] Logged out");
+        console.error(`[whatsapp-mcp] Connection closed (code=${code}), not retrying`);
       }
     }
   });
@@ -132,12 +183,14 @@ async function connectWhatsApp() {
         conversationTimestamp: c.conversationTimestamp,
       });
     }
+    saveCache();
   });
   sock.ev.on("chats.update", (updates) => {
     for (const u of updates) {
       const existing = chatStore.get(u.id) || { id: u.id, name: u.id };
       chatStore.set(u.id, { ...existing, ...u, name: u.name || existing.name });
     }
+    saveCache();
   });
 
   // Store contacts
@@ -149,12 +202,14 @@ async function connectWhatsApp() {
         phone: c.id.replace("@s.whatsapp.net", ""),
       });
     }
+    saveCache();
   });
   sock.ev.on("contacts.update", (updates) => {
     for (const u of updates) {
       const existing = contactStore.get(u.id) || { id: u.id, phone: u.id };
       contactStore.set(u.id, { ...existing, ...u });
     }
+    saveCache();
   });
 
   // Store messages
@@ -195,6 +250,7 @@ async function connectWhatsApp() {
       if (list.length > MAX_MSGS_PER_CHAT) list.shift();
       messageStore.set(jid, list);
     }
+    saveCache();
   });
 
   // Wait for connection
@@ -219,19 +275,22 @@ async function connectWhatsApp() {
   });
 
   // Wait for initial history sync (Baileys fires messaging-history.set after connect)
+  // If cache was loaded, only wait 3s for fresh data; otherwise wait up to 15s
   if (chatStore.size === 0) {
     await new Promise((resolve) => {
-      const syncTimeout = setTimeout(resolve, 15000); // don't block forever
+      const syncTimeout = setTimeout(resolve, 15000);
       const syncHandler = ({ isLatest }) => {
         if (isLatest) {
           clearTimeout(syncTimeout);
           sock.ev.off("messaging-history.set", syncHandler);
-          // small grace period for trailing events
           setTimeout(resolve, 500);
         }
       };
       sock.ev.on("messaging-history.set", syncHandler);
     });
+  } else {
+    // Cache loaded — give a short window for live updates, don't block
+    await new Promise((resolve) => setTimeout(resolve, 3000));
   }
 
   return sock;

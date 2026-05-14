@@ -18,6 +18,7 @@ import P from "pino";
 import qrcode from "qrcode-terminal";
 
 const AUTH_DIR = path.join(os.homedir(), ".whatsapp-mcp", "auth");
+const CACHE_FILE = path.join(os.homedir(), ".whatsapp-mcp", "chat-cache.json");
 const logger = P({ level: "warn" });
 
 fs.mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 });
@@ -75,8 +76,19 @@ async function login() {
   });
 
   // Log history sync events if they happen during login
+  const chatStore = new Map();
+  const contactStore = new Map();
   sock.ev.on("messaging-history.set", ({ chats, contacts, messages, isLatest }) => {
     console.log(`[sync] ${chats.length} chats, ${contacts.length} contacts, ${messages.length} msgs (isLatest=${isLatest})`);
+    for (const c of chats) chatStore.set(c.id, { id: c.id, name: c.name || c.id, unread: c.unreadCount || 0, conversationTimestamp: c.conversationTimestamp });
+    for (const c of contacts) contactStore.set(c.id, { id: c.id, name: c.name || c.notify || c.verifiedName || c.id, phone: c.id.replace("@s.whatsapp.net", "") });
+    // Save cache for the MCP server
+    try {
+      fs.writeFileSync(CACHE_FILE, JSON.stringify({ ts: Date.now(), chats: [...chatStore.values()], contacts: [...contactStore.values()] }), { mode: 0o600 });
+      console.log(`[cache] saved ${chatStore.size} chats, ${contactStore.size} contacts`);
+    } catch (e) {
+      console.error("[cache] save error:", e.message);
+    }
   });
 }
 
