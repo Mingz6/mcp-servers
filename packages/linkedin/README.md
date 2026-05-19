@@ -42,7 +42,7 @@ Add to your VS Code `mcp.json`:
   "servers": {
     "linkedin": {
       "command": "bash",
-      "args": ["/Users/mingz/code/personal/mcp-servers/packages/linkedin/run.sh"]
+      "args": ["/path/to/mcp-servers/packages/linkedin/run.sh"]
     }
   }
 }
