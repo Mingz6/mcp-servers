@@ -52,7 +52,7 @@ export TEAMS_MCP_TENANT_ID="your-tenant-id"  # or "common" for multi-tenant
 ### 4. Build
 
 ```bash
-cd ~/code/personal/mcp-servers/packages/teams-chat
+cd /path/to/mcp-servers/packages/teams-chat
 npm install
 npm run build
 ```

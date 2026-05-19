@@ -37,7 +37,7 @@ Steps:
 ### 2. Build
 
 ```bash
-cd ~/code/personal/mcp-servers
+cd /path/to/mcp-servers
 npm run build:outlook
 ```
 
