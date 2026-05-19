@@ -116,7 +116,7 @@ async def telegram_login() -> str:
     """Force interactive login. Only needed on first use or session expiry."""
     raise RuntimeError(
         "Interactive login required. Run from terminal:\n"
-        "  cd ~/code/personal/mcp-servers/packages/telegram\n"
+        "  cd /path/to/mcp-servers/packages/telegram\n"
         "  .venv/bin/python mcp_server.py --login"
     )
 
