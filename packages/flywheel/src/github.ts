@@ -191,3 +191,52 @@ export async function getRecentCommitCount(
 
   return commits.length;
 }
+
+export interface UserRepo {
+  url: string;
+  name: string;
+  full_name: string;
+  description: string | null;
+  stars: number;
+  language: string | null;
+  pushed_at: string;
+  created_at: string;
+}
+
+/**
+ * Fetch a GitHub user's repos sorted by most recently pushed.
+ * Returns repos pushed within the last `sinceDays`.
+ */
+export async function getUserRepos(
+  handle: string,
+  sinceDays: number = 30
+): Promise<UserRepo[]> {
+  const data = (await githubFetch(
+    `/users/${handle}/repos?sort=pushed&per_page=30&type=owner`
+  )) as Array<{
+    html_url: string;
+    name: string;
+    full_name: string;
+    description: string | null;
+    stargazers_count: number;
+    language: string | null;
+    pushed_at: string;
+    created_at: string;
+    fork: boolean;
+  }>;
+
+  const cutoff = Date.now() - sinceDays * 24 * 60 * 60 * 1000;
+
+  return data
+    .filter((r) => !r.fork && new Date(r.pushed_at).getTime() > cutoff)
+    .map((r) => ({
+      url: r.html_url,
+      name: r.name,
+      full_name: r.full_name,
+      description: r.description,
+      stars: r.stargazers_count,
+      language: r.language,
+      pushed_at: r.pushed_at,
+      created_at: r.created_at,
+    }));
+}

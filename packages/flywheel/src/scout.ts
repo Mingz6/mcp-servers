@@ -1,6 +1,7 @@
 import {
     compareCommits,
     getLatestSha,
+    getUserRepos,
     searchRepos
 } from "./github.js";
 import {
@@ -10,6 +11,7 @@ import {
     updateRepoAfterCheck,
     type Repo
 } from "./repos.js";
+import { loadWatchlistStrategies } from "./watchlist.js";
 
 export interface RepoUpdate {
   repo: string;
@@ -161,7 +163,7 @@ export async function checkSingleRepo(repo: Repo): Promise<RepoUpdate | null> {
   }
 }
 
-const DEFAULT_SCOUT_QUERIES = [
+const FALLBACK_QUERIES = [
   "copilot instructions",
   "MCP server",
   "claude agent skills",
@@ -205,8 +207,11 @@ export async function runScout(
   // Save updated check timestamps
   await saveRepos(updatedData);
 
-  // Run discovery searches
-  const searchQueries = queries ?? DEFAULT_SCOUT_QUERIES;
+  // Load section C strategies from watchlist (topics, keywords, users)
+  const watchlist = await loadWatchlistStrategies();
+
+  // Run keyword/topic discovery searches
+  const searchQueries = queries ?? (watchlist.searchQueries.length > 0 ? watchlist.searchQueries : FALLBACK_QUERIES);
   const allDiscoveries: Discovery[] = [];
 
   for (const query of searchQueries) {
@@ -236,6 +241,34 @@ export async function runScout(
       }
     } catch {
       // Non-fatal — one search failing shouldn't tank the scout
+    }
+  }
+
+  // Scout repos from tracked users (section C "users" strategy)
+  if (!queries && watchlist.userHandles.length > 0) {
+    for (const handle of watchlist.userHandles) {
+      try {
+        const repos = await getUserRepos(handle, 30);
+        for (const r of repos) {
+          if (data.repos.some((existing) => existing.url === r.url)) continue;
+          if (r.stars < 10) continue; // skip trivial repos
+
+          const ageDays = (Date.now() - new Date(r.created_at).getTime()) / (24 * 60 * 60 * 1000);
+          const growthScore = ageDays > 0 ? Math.round((r.stars / ageDays) * 10) / 10 : 0;
+
+          allDiscoveries.push({
+            url: r.url,
+            name: r.full_name,
+            stars: r.stars,
+            growthScore,
+            language: r.language,
+            why: `Active repo from ${handle}. ${r.description ?? ""}`.trim(),
+            category: "user-tracked",
+          });
+        }
+      } catch {
+        // Non-fatal — one user fetch failing shouldn't tank the scout
+      }
     }
   }
 
@@ -350,15 +383,32 @@ export function formatScoutReport(report: ScoutReport): string {
   }
 
   if (report.discoveries.length > 0) {
-    lines.push("## Discoveries\n");
-    lines.push("| Repo | Stars | Growth | Language | Why |");
-    lines.push("|------|-------|--------|----------|-----|");
-    for (const d of report.discoveries) {
-      lines.push(
-        `| [${d.name}](${d.url}) | ${d.stars} | ${d.growthScore}/day | ${d.language ?? "—"} | ${d.why.slice(0, 80)} |`
-      );
+    const userTracked = report.discoveries.filter((d) => d.category === "user-tracked");
+    const searched = report.discoveries.filter((d) => d.category !== "user-tracked");
+
+    if (searched.length > 0) {
+      lines.push("## Discoveries (keyword/topic search)\n");
+      lines.push("| Repo | Stars | Growth | Language | Why |");
+      lines.push("|------|-------|--------|----------|-----|");
+      for (const d of searched) {
+        lines.push(
+          `| [${d.name}](${d.url}) | ${d.stars} | ${d.growthScore}/day | ${d.language ?? "—"} | ${d.why.slice(0, 80)} |`
+        );
+      }
+      lines.push("");
     }
-    lines.push("");
+
+    if (userTracked.length > 0) {
+      lines.push("## Discoveries (tracked users)\n");
+      lines.push("| Repo | Stars | Growth | Language | Why |");
+      lines.push("|------|-------|--------|----------|-----|");
+      for (const d of userTracked) {
+        lines.push(
+          `| [${d.name}](${d.url}) | ${d.stars} | ${d.growthScore}/day | ${d.language ?? "—"} | ${d.why.slice(0, 80)} |`
+        );
+      }
+      lines.push("");
+    }
   }
 
   if (report.knowledgeUpdates.length > 0) {
