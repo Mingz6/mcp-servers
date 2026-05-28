@@ -388,6 +388,9 @@ async function main() {
   console.error("Outlook MCP server started");
 }
 
+process.on("unhandledRejection", (err) => { console.error("[outlook] Unhandled rejection:", err); process.exit(1); });
+process.on("uncaughtException", (err) => { console.error("[outlook] Uncaught exception:", err); process.exit(1); });
+
 main().catch((err) => {
   console.error("Fatal:", err);
   process.exit(1);

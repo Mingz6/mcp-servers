@@ -300,6 +300,9 @@ async function main() {
   console.error("[ms-loop] MCP server started (delegated auth, CRUD enabled)");
 }
 
+process.on("unhandledRejection", (err) => { console.error("[ms-loop] Unhandled rejection:", err); process.exit(1); });
+process.on("uncaughtException", (err) => { console.error("[ms-loop] Uncaught exception:", err); process.exit(1); });
+
 main().catch((err) => {
   console.error("[ms-loop] Fatal:", err);
   process.exit(1);

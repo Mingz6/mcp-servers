@@ -401,6 +401,9 @@ async function main() {
   console.error("Apple Mail MCP server started");
 }
 
+process.on("unhandledRejection", (err) => { console.error("[applemail] Unhandled rejection:", err); process.exit(1); });
+process.on("uncaughtException", (err) => { console.error("[applemail] Uncaught exception:", err); process.exit(1); });
+
 main().catch((err) => {
   console.error("Fatal:", err);
   process.exit(1);

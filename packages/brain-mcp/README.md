@@ -16,6 +16,10 @@ Local MCP server for `~/code/brain`. It gives Copilot, Claude Code, and other ag
 | `brain_lint` | Lint Markdown pages for broken links, frontmatter issues, and structure problems. |
 | `brain_link_source` | Link a captured source into one or more brain pages by adding cross-references. |
 | `brain_context_pack` | Build a context bundle (page + linked sources + backlinks) for an agent task. |
+| `brain_index` | Build or update the vector search index (full, incremental, or stats). |
+| `brain_preflight` | Given a task, returns coupled actions that must be completed before done. |
+| `brain_verify_completion` | Verify all coupled actions are satisfied before marking a task done. |
+| `brain_get_relevant_instructions` | Find the most relevant .instructions.md files for a task via semantic search. |
 
 ## Config
 
