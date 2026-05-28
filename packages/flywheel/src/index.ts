@@ -403,6 +403,9 @@ async function main() {
   console.error("[flywheel] MCP server ready (8 tools).");
 }
 
+process.on("unhandledRejection", (err) => { console.error("[flywheel] Unhandled rejection:", err); process.exit(1); });
+process.on("uncaughtException", (err) => { console.error("[flywheel] Uncaught exception:", err); process.exit(1); });
+
 main().catch((err) => {
   console.error("Fatal:", err);
   process.exit(1);

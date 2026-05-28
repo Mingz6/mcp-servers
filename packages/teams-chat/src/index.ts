@@ -408,6 +408,9 @@ async function main() {
   console.error("Teams Chat MCP server running on stdio");
 }
 
+process.on("unhandledRejection", (err) => { console.error("[teams-chat] Unhandled rejection:", err); process.exit(1); });
+process.on("uncaughtException", (err) => { console.error("[teams-chat] Uncaught exception:", err); process.exit(1); });
+
 main().catch((error) => {
   console.error("Fatal:", error.message || error);
   process.exit(1);

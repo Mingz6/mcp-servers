@@ -277,6 +277,9 @@ async function main() {
   await server.connect(transport);
 }
 
+process.on("unhandledRejection", (err) => { console.error("[worker-center-mcp] Unhandled rejection:", err); process.exit(1); });
+process.on("uncaughtException", (err) => { console.error("[worker-center-mcp] Uncaught exception:", err); process.exit(1); });
+
 main().catch((err) => {
   console.error("Fatal:", err);
   process.exit(1);

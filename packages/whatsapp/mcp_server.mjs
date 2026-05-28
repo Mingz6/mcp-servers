@@ -38,6 +38,7 @@ const logger = P({ level: "silent" });
 
 let sock = null;
 let connectionOpen = false;
+let retryCount = 0;
 
 // In-memory stores populated by events
 const chatStore = new Map();     // jid -> { id, name, unread, lastMsg, ... }
@@ -131,6 +132,7 @@ async function connectWhatsApp() {
   sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
     if (connection === "open") {
       connectionOpen = true;
+      retryCount = 0;
       console.error("[whatsapp-mcp] Connected");
     }
     if (connection === "close") {
@@ -140,10 +142,12 @@ async function connectWhatsApp() {
         console.error("[whatsapp-mcp] Logged out — session invalidated");
       } else if (code === 408 || code === 440 || code === 500 || code === 515) {
         // Transient errors — retry a few times
-        if (!sock._retryCount) sock._retryCount = 0;
-        sock._retryCount++;
-        if (sock._retryCount <= 3) {
-          console.error(`[whatsapp-mcp] Reconnecting (attempt ${sock._retryCount}/3)...`);
+        retryCount++;
+        if (retryCount <= 3) {
+          console.error(`[whatsapp-mcp] Reconnecting (attempt ${retryCount}/3)...`);
+          const oldSock = sock;
+          sock = null;
+          try { oldSock.end(); } catch (_) {}
           setTimeout(() => connectWhatsApp().catch(console.error), 3000);
         } else {
           console.error("[whatsapp-mcp] Max retries reached, giving up");
@@ -259,11 +263,20 @@ async function connectWhatsApp() {
       () => reject(new Error("Connection timeout (30s)")),
       30000
     );
-    const handler = ({ connection }) => {
+    const handler = ({ connection, lastDisconnect }) => {
       if (connection === "open") {
         clearTimeout(timeout);
         sock.ev.off("connection.update", handler);
         resolve();
+      }
+      if (connection === "close") {
+        const code = (lastDisconnect?.error)?.output?.statusCode;
+        // Non-retryable codes — reject immediately instead of hanging
+        if (code === DisconnectReason.loggedOut || (code && code !== 408 && code !== 440 && code !== 500 && code !== 515)) {
+          clearTimeout(timeout);
+          sock.ev.off("connection.update", handler);
+          reject(new Error(`Connection failed (code=${code})`));
+        }
       }
     };
     if (connectionOpen) {
@@ -690,6 +703,9 @@ async function main() {
   await server.connect(transport);
   console.error("[whatsapp-mcp] MCP server running on stdio");
 }
+
+process.on("unhandledRejection", (err) => { console.error("[whatsapp-mcp] Unhandled rejection:", err); process.exit(1); });
+process.on("uncaughtException", (err) => { console.error("[whatsapp-mcp] Uncaught exception:", err); process.exit(1); });
 
 main().catch((err) => {
   console.error("[whatsapp-mcp] Fatal:", err);

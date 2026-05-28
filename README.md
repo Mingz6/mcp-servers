@@ -14,6 +14,11 @@ All MCP servers in one place — custom and third-party. VS Code's `mcp.json` po
 | [discord-user](packages/discord-user/) | Custom (Node) | Read Discord servers/DMs via personal user token (read-only) | See community channels the bot can't access |
 | [wechat](packages/wechat/) | Custom (Python) | Query WeChat chats, search messages, voice transcription (read-only) | Family/personal chat access from Copilot |
 | [flywheel](packages/flywheel/) | Custom (Node) | Track reference repos, check updates, scout for new patterns | Daily self-improvement loop — knowledge aggregator for `/flywheel` skill |
+| [linkedin](packages/linkedin/) | Custom (Python) | Read/send LinkedIn messages, search people, view profiles | Professional networking from Copilot |
+| [ms-loop](packages/ms-loop/) | Custom (Node) | CRUD Microsoft Loop pages via Graph API | Read/write Loop docs without switching apps |
+| [telegram](packages/telegram/) | Custom (Python) | Read/send Telegram messages, search chats, list contacts | Personal/group chat access via Telethon |
+| [whatsapp](packages/whatsapp/) | Custom (Node/JS) | Read/send WhatsApp messages, search chats, list contacts | Family/group chats via Baileys WebSocket |
+| [worker-center-mcp](packages/worker-center-mcp/) | Custom (Node) | Query worker-center status, price history, job pipeline | Agent access to scheduled task dashboard |
 | awesome-copilot | Third-party (Docker) | Microsoft MCP .NET sample — copilot instructions search | Load custom copilot instructions dynamically |
 | context7 | Third-party (npx) | Fetch up-to-date library docs from Upstash | Get current API docs instead of outdated training data |
 
@@ -22,19 +27,22 @@ All MCP servers in one place — custom and third-party. VS Code's `mcp.json` po
 ```
 mcp-servers/
 ├── packages/
-│   ├── teams-chat/    # Custom — MS Teams via Graph API
-│   │   └── run.sh     # Wrapper: loads nvm → exec node dist/index.js
-│   ├── outlook/       # Custom — Outlook via Graph API
-│   │   └── run.sh     # Wrapper: loads nvm → exec node dist/index.js
-│   ├── brain-mcp/     # Custom — local brain Markdown wiki API
-│   │   └── run.sh     # Wrapper: loads nvm → exec node dist/index.js
-│   ├── wechat/        # Custom — WeChat via SQLCipher (read-only)
-│   │   └── run.sh     # Wrapper: activates .venv → exec python mcp_server.py
-│   └── imessage/      # Custom — iMessage/SMS via macOS Messages.app
-│       └── run.sh     # Wrapper: activates .venv → exec python mcp_server.py
+│   ├── applemail/         # Custom — Apple Mail via SQLite + AppleScript
+│   ├── brain-mcp/         # Custom — local brain Markdown wiki API
+│   ├── discord-user/      # Custom — Discord via personal user token
+│   ├── flywheel/          # Custom — reference repo tracker
+│   ├── imessage/          # Custom (Python) — iMessage/SMS via macOS
+│   ├── linkedin/          # Custom (Python) — LinkedIn via browser automation
+│   ├── ms-loop/           # Custom — Microsoft Loop via Graph API
+│   ├── outlook/           # Custom — Outlook via Graph API
+│   ├── teams-chat/        # Custom — MS Teams via Graph API
+│   ├── telegram/          # Custom (Python) — Telegram via Telethon
+│   ├── wechat/            # Custom (Python) — WeChat via SQLCipher
+│   ├── whatsapp/          # Custom (Node/JS) — WhatsApp via Baileys
+│   └── worker-center-mcp/ # Custom — worker-center dashboard API
 ├── scripts/
-│   └── npx-nvm.sh     # Wrapper: loads nvm before running npx (for third-party servers)
-└── README.md           # This file — the single registry
+│   └── npx-nvm.sh         # Wrapper: loads nvm before running npx
+└── README.md
 ```
 
 ## Quick Start
@@ -44,9 +52,9 @@ npm install        # installs Node workspaces (all *.ts packages)
 npm run build      # builds all Node servers
 ```
 
-For Python servers (wechat, imessage):
+For Python servers (wechat, imessage, linkedin, telegram):
 ```bash
-cd packages/wechat   # or packages/imessage
+cd packages/wechat   # or imessage, linkedin, telegram
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```

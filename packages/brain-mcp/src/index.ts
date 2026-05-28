@@ -460,6 +460,9 @@ async function main() {
   console.error(`Brain MCP server started. Root: ${brainRoot} (${BRAIN_ROOT_ENV})`);
 }
 
+process.on("unhandledRejection", (err) => { console.error("[brain-mcp] Unhandled rejection:", err); process.exit(1); });
+process.on("uncaughtException", (err) => { console.error("[brain-mcp] Uncaught exception:", err); process.exit(1); });
+
 main().catch((err) => {
   console.error("Fatal:", err);
   process.exit(1);
