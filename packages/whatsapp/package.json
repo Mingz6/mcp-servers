@@ -5,6 +5,7 @@
   "type": "module",
   "description": "WhatsApp MCP server using Baileys",
   "scripts": {
+    "build": "echo 'no-op (plain JS)'",
     "start": "node mcp_server.mjs",
     "login": "node login.mjs"
   },
