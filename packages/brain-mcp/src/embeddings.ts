@@ -20,6 +20,8 @@ function getClient(): AzureOpenAI {
     endpoint,
     apiKey,
     apiVersion: "2024-06-01",
+    timeout: 30_000,
+    maxRetries: 2,
   });
   return client;
 }
