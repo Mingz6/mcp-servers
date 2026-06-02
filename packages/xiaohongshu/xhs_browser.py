@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import Optional
 
 from playwright.async_api import BrowserContext, Page, async_playwright
+from playwright_stealth import Stealth
+
+_stealth = Stealth(
+    navigator_platform_override="MacIntel",
+    navigator_languages_override=("zh-CN", "zh"),
+)
 
 logger = logging.getLogger("xiaohongshu-mcp")
 
@@ -49,17 +55,26 @@ class XhsBrowser:
 
         return not has_content
 
-    async def _ensure_browser(self) -> BrowserContext:
-        """Launch persistent browser context. All state persists automatically."""
+    async def _ensure_browser(self, visible: bool = False) -> BrowserContext:
+        """Launch persistent browser context.
+
+        Args:
+            visible: If True, show browser window on-screen (for login/QR scan).
+                     If False (default), run off-screen to avoid disturbing user.
+        """
         if self._context:
             return self._context
 
         self._playwright = await async_playwright().start()
         USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+        args = ["--disable-blink-features=AutomationControlled"]
+        if not visible:
+            args += ["--window-position=-32000,-32000", "--window-size=1,1"]
+
         self._context = await self._playwright.chromium.launch_persistent_context(
             user_data_dir=str(USER_DATA_DIR),
-            headless=os.environ.get("XHS_HEADLESS", "true").lower() == "true",
+            headless=False,  # Always non-headless (headless is detected by XHS)
             viewport={"width": 1280, "height": 900},
             user_agent=(
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -67,6 +82,8 @@ class XhsBrowser:
                 "Chrome/131.0.0.0 Safari/537.36"
             ),
             locale="zh-CN",
+            args=args,
+            ignore_default_args=["--enable-automation"],
         )
 
         # Migrate legacy cookies if no existing profile data
@@ -97,10 +114,15 @@ class XhsBrowser:
             except Exception as e:
                 logger.warning("Failed to migrate cookies.json: %s", e)
 
-    async def new_page(self) -> Page:
-        """Create a new page in the persistent browser context."""
-        ctx = await self._ensure_browser()
+    async def new_page(self, visible: bool = False) -> Page:
+        """Create a new page in the persistent browser context.
+
+        Args:
+            visible: If True, ensure browser is on-screen (for login flows).
+        """
+        ctx = await self._ensure_browser(visible=visible)
         page = await ctx.new_page()
+        await _stealth.apply_stealth_async(page)
         return page
 
     async def save_cookies(self):
@@ -151,8 +173,16 @@ class XhsBrowser:
             await page.close()
 
     async def get_qrcode(self) -> dict:
-        """Navigate to login page, capture QR code image."""
-        page = await self.new_page()
+        """Navigate to login page, capture QR code image. Shows visible browser window."""
+        # Close existing context if it was off-screen, re-open visible
+        if self._context:
+            await self._context.close()
+            self._context = None
+            if self._playwright:
+                await self._playwright.stop()
+                self._playwright = None
+
+        page = await self.new_page(visible=True)
         try:
             await page.goto(
                 f"{XHS_BASE}/explore", wait_until="domcontentloaded", timeout=30000
@@ -219,7 +249,10 @@ class XhsBrowser:
             return {"success": False, "message": f"获取二维码失败: {e}"}
 
     async def _wait_for_login(self, page: Page):
-        """Wait for login to complete after QR scan (detect web_session value change)."""
+        """Wait for login to complete after QR scan (detect web_session value change).
+
+        After successful login, closes visible browser and restarts off-screen.
+        """
         try:
             # Get current web_session value (unauthenticated)
             cookies = await self._context.cookies(XHS_BASE)
@@ -234,17 +267,46 @@ class XhsBrowser:
                     await page.wait_for_timeout(2000)
                     await self.save_cookies()
                     logger.info("Login successful, session persisted")
+                    # Close visible browser; next operation will open off-screen
+                    await page.close()
+                    await self._context.close()
+                    self._context = None
+                    if self._playwright:
+                        await self._playwright.stop()
+                        self._playwright = None
                     return
             logger.warning("Login wait timed out after 4 minutes")
         except Exception as e:
             logger.warning("Login wait failed: %s", e)
         finally:
-            await page.close()
+            try:
+                await page.close()
+            except Exception:
+                pass
 
     async def search_feeds(self, keyword: str, filters: Optional[dict] = None) -> list | dict:
-        """Search xiaohongshu for posts by keyword."""
+        """Search xiaohongshu for posts by keyword.
+
+        Uses API response interception for reliable data extraction.
+        Falls back to DOM scraping if API interception fails.
+        """
         page = await self.new_page()
         try:
+            # Set up API response interception
+            api_items = []
+
+            async def capture_search_api(response):
+                if "api/sns/web" in response.url and "search" in response.url:
+                    try:
+                        body = await response.json()
+                        items = body.get("data", {}).get("items", [])
+                        if items:
+                            api_items.extend(items)
+                    except Exception:
+                        pass
+
+            page.on("response", capture_search_api)
+
             search_url = f"{XHS_BASE}/search_result?keyword={keyword}&source=web_search_result_note"
             await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(5000)
@@ -253,20 +315,79 @@ class XhsBrowser:
             await page.keyboard.press("Escape")
             await page.wait_for_timeout(500)
 
-            if await self._check_login_required(page):
-                return {"error": "login_required", "message": "请先登录。使用 xhs_get_qrcode 获取二维码扫码登录。"}
-
-            # Apply filters if provided
+            # Apply filters if provided (triggers new API call)
             if filters:
                 await self._apply_search_filters(page, filters)
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(3000)
 
-            # Extract feeds from __INITIAL_STATE__ (Vue store)
+            # Check if we got API data
+            if api_items:
+                feeds = []
+                for item in api_items:
+                    feed = self._normalize_api_item(item)
+                    if feed:
+                        feeds.append(feed)
+                if feeds:
+                    return feeds
+
+            # Fallback: try __INITIAL_STATE__
             feeds = await self._extract_feeds_from_state(page, "search")
-            await self.save_cookies()
-            return feeds
+            if feeds:
+                return feeds
+
+            # Check if session is invalid (redirected to explore or no content)
+            if "explore" in page.url or await self._check_login_required(page):
+                return {
+                    "error": "login_required",
+                    "message": "Session 已过期，需要重新登录。使用 xhs_get_qrcode 扫码登录。",
+                }
+
+            return []
         finally:
+            page.remove_listener("response", capture_search_api)
             await page.close()
+
+    def _normalize_api_item(self, item: dict) -> Optional[dict]:
+        """Normalize a search API response item into standard feed format."""
+        note_card = item.get("note_card", {})
+        if not note_card:
+            return None
+
+        feed_id = item.get("id") or ""
+        xsec_token = item.get("xsec_token") or ""
+        title = note_card.get("display_title") or note_card.get("title") or ""
+        desc = note_card.get("desc") or ""
+        note_type = note_card.get("type") or ""
+
+        user = note_card.get("user") or {}
+        author = user.get("nickname") or user.get("nick_name") or ""
+        user_id = user.get("user_id") or ""
+
+        interact = note_card.get("interact_info") or {}
+        liked_count = interact.get("liked_count") or "0"
+
+        cover = note_card.get("cover") or {}
+        cover_url = ""
+        if isinstance(cover, dict):
+            info_list = cover.get("info_list") or []
+            if info_list:
+                cover_url = info_list[-1].get("url") or ""
+            elif cover.get("url"):
+                cover_url = cover["url"]
+            elif cover.get("url_default"):
+                cover_url = cover["url_default"]
+
+        return {
+            "feed_id": feed_id,
+            "xsec_token": xsec_token,
+            "title": title,
+            "desc": desc[:100] if desc else "",
+            "type": "video" if note_type == "video" else "image",
+            "author": author,
+            "user_id": user_id,
+            "likes": str(liked_count),
+            "cover": cover_url,
+        } if feed_id else None
 
     async def _apply_search_filters(self, page: Page, filters: dict):
         """Apply search filters by clicking filter tabs."""
@@ -307,6 +428,21 @@ class XhsBrowser:
             return []
 
         if mode == "search":
+            # Wait for feeds to be populated (XHS loads them async via XHR)
+            try:
+                await page.wait_for_function(
+                    """() => {
+                        const s = window.__INITIAL_STATE__;
+                        if (!s || !s.search || !s.search.feeds) return false;
+                        const feeds = s.search.feeds;
+                        const val = feeds.value || feeds._value || feeds._rawValue;
+                        return val && Array.isArray(val) && val.length > 0;
+                    }""",
+                    timeout=15000,
+                )
+            except Exception:
+                logger.info("Feeds did not populate within timeout")
+
             js_code = """() => {
                 if (window.__INITIAL_STATE__ &&
                     window.__INITIAL_STATE__.search &&

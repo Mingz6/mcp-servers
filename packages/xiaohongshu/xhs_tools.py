@@ -37,6 +37,7 @@ def register_tools(mcp: FastMCP, browser: XhsBrowser):
         keyword: str,
         sort_by: str = "综合",
         note_type: str = "不限",
+        publish_time: str = "不限",
     ) -> str:
         """搜索小红书内容。
 
@@ -44,12 +45,15 @@ def register_tools(mcp: FastMCP, browser: XhsBrowser):
             keyword: 搜索关键词
             sort_by: 排序方式 (综合/最新/最多点赞)
             note_type: 笔记类型 (不限/视频/图文)
+            publish_time: 发布时间 (不限/一天内/一周内/半年内)
         """
         filters = {}
         if sort_by != "综合":
             filters["sort_by"] = sort_by
         if note_type != "不限":
             filters["note_type"] = note_type
+        if publish_time != "不限":
+            filters["publish_time"] = publish_time
 
         feeds = await browser.search_feeds(keyword, filters if filters else None)
         if isinstance(feeds, dict) and feeds.get("error"):
