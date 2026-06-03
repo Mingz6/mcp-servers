@@ -27,14 +27,14 @@ function toolError(err: unknown): { content: { type: "text"; text: string }[]; i
 
 server.tool(
   "teams_list_chats",
-  "List recent Microsoft Teams chats with participant names and last message preview",
+  "List recent Microsoft Teams chats with participant names and last message preview. Supports pagination beyond 50 chats.",
   {
     count: z
       .number()
       .min(1)
-      .max(50)
+      .max(200)
       .default(20)
-      .describe("Number of chats to return (default 20, max 50)"),
+      .describe("Number of chats to return (default 20, max 200). Paginates automatically."),
   },
   async ({ count }) => {
     try {
@@ -62,7 +62,7 @@ server.tool(
 
 server.tool(
   "teams_read_chat",
-  "Read messages from a specific Teams chat. Use teams_list_chats or teams_find_chat first to get the chat ID.",
+  "Read messages from a specific Teams chat. Use teams_list_chats or teams_find_chat first to get the chat ID. Supports pagination for more than 50 messages.",
   {
     chatId: z
       .string()
@@ -70,9 +70,9 @@ server.tool(
     count: z
       .number()
       .min(1)
-      .max(50)
+      .max(200)
       .default(30)
-      .describe("Number of recent messages to return (default 30, max 50)"),
+      .describe("Number of recent messages to return (default 30, max 200). Paginates automatically."),
     includeImages: z
       .boolean()
       .default(false)
@@ -125,7 +125,7 @@ server.tool(
 
 server.tool(
   "teams_find_chat",
-  "Find a Teams chat by participant name or chat topic. Returns matching chats with their IDs.",
+  "Find a Teams chat by participant name or chat topic. Searches through all available chats (paginated, not just recent 50). Returns matching chats with their IDs.",
   {
     query: z
       .string()
@@ -279,18 +279,22 @@ server.tool(
 
 server.tool(
   "teams_send_message",
-  "Send a message to a Teams chat. Use teams_find_chat or teams_list_chats first to get the chat ID.",
+  "Send a message to a Teams chat. Supports plain text, markdown (auto-converted to rich HTML), or raw HTML. Use teams_find_chat or teams_list_chats first to get the chat ID.",
   {
     chatId: z
       .string()
       .describe("The chat ID to send the message to"),
     content: z
       .string()
-      .describe("The message content (plain text or HTML)"),
+      .describe("The message content"),
+    format: z
+      .enum(["markdown", "text", "html"])
+      .default("markdown")
+      .describe("Message format: 'markdown' (default, converts to rich HTML), 'text' (plain text, preserves newlines), 'html' (raw HTML pass-through)"),
   },
-  async ({ chatId, content }) => {
+  async ({ chatId, content, format }) => {
     try {
-      const msgId = await sendMessage(chatId, content);
+      const msgId = await sendMessage(chatId, content, format);
       return {
         content: [{
           type: "text" as const,

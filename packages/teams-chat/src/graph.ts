@@ -39,6 +39,23 @@ async function graphFetch(
   }
 }
 
+async function graphFetchUrl(fullUrl: string): Promise<any> {
+  const token = await getAccessToken();
+  const response = await fetch(fullUrl, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Graph API ${response.status}: ${body}`);
+  }
+
+  return response.json();
+}
+
 async function graphFetchBinary(path: string): Promise<{ data: Buffer; contentType: string }> {
   const token = await getAccessToken();
   const url = `${GRAPH_BASE}${path}`;
@@ -105,13 +122,15 @@ export interface ChatMessage {
 // --- API Functions ---
 
 export async function listChats(top = 20): Promise<ChatSummary[]> {
+  const pageSize = Math.min(top, 50); // Graph API max per page is 50
   const data = await graphFetch("/me/chats", {
-    $top: String(top),
+    $top: String(pageSize),
     $expand: "members,lastMessagePreview",
     $orderby: "lastMessagePreview/createdDateTime desc",
   });
 
-  return (data.value || []).map((chat: any) => ({
+  const results: ChatSummary[] = [];
+  const mapChat = (chat: any): ChatSummary => ({
     id: chat.id,
     topic: chat.topic,
     chatType: chat.chatType,
@@ -123,22 +142,59 @@ export async function listChats(top = 20): Promise<ChatSummary[]> {
     lastMessage: chat.lastMessagePreview?.body?.content
       ? truncate(stripHtml(chat.lastMessagePreview.body.content), 120)
       : undefined,
-  }));
+  });
+
+  for (const chat of data.value || []) {
+    results.push(mapChat(chat));
+  }
+
+  // Follow pagination if we need more than one page
+  let nextLink: string | undefined = data["@odata.nextLink"];
+  const maxPages = 20; // Safety: max 1000 chats
+  let page = 0;
+
+  while (nextLink && results.length < top && page < maxPages) {
+    page++;
+    const pageData = await graphFetchUrl(nextLink);
+    for (const chat of pageData.value || []) {
+      results.push(mapChat(chat));
+      if (results.length >= top) break;
+    }
+    nextLink = pageData["@odata.nextLink"];
+  }
+
+  return results.slice(0, top);
 }
 
 export async function readChatMessages(
   chatId: string,
   top = 30
 ): Promise<ChatMessage[]> {
+  const pageSize = Math.min(top, 50);
   const data = await graphFetch(
     `/me/chats/${encodeURIComponent(chatId)}/messages`,
     {
-      $top: String(top),
+      $top: String(pageSize),
       $orderby: "createdDateTime desc",
     }
   );
 
-  return (data.value || [])
+  const allMessages: any[] = [...(data.value || [])];
+
+  // Follow pagination if we need more messages
+  let nextLink: string | undefined = data["@odata.nextLink"];
+  const maxPages = 20;
+  let page = 0;
+
+  while (nextLink && allMessages.length < top && page < maxPages) {
+    page++;
+    const pageData = await graphFetchUrl(nextLink);
+    allMessages.push(...(pageData.value || []));
+    nextLink = pageData["@odata.nextLink"];
+  }
+
+  return allMessages
+    .slice(0, top)
     .filter((msg: any) => msg.body?.content)
     .map((msg: any) => ({
       id: msg.id,
@@ -157,8 +213,8 @@ export async function readChatMessages(
 export async function findChatByParticipant(
   name: string
 ): Promise<ChatSummary[]> {
-  // Graph doesn't have a direct chat search — fetch recent chats and filter locally
-  const chats = await listChats(50);
+  // Paginate through all chats (up to 500) to find matches
+  const chats = await listChats(500);
   const lower = name.toLowerCase();
   return chats.filter(
     (chat) =>
@@ -239,14 +295,76 @@ export async function reactToMessage(
 
 export async function sendMessage(
   chatId: string,
-  content: string
+  content: string,
+  format: "text" | "html" | "markdown" = "markdown"
 ): Promise<string> {
+  let body: { contentType: string; content: string };
+
+  if (format === "html") {
+    body = { contentType: "html", content };
+  } else if (format === "text") {
+    body = { contentType: "text", content };
+  } else {
+    // markdown (default): convert to HTML for rich display
+    body = { contentType: "html", content: markdownToHtml(content) };
+  }
+
   const response = await graphPost(
     `/chats/${encodeURIComponent(chatId)}/messages`,
-    { body: { contentType: "html", content } }
+    { body }
   );
   const data = await response.json();
   return data.id;
+}
+
+function markdownToHtml(md: string): string {
+  const lines = md.split("\n");
+  const html: string[] = [];
+  let inUl = false;
+  let inOl = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+
+    // Inline formatting
+    line = line
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/__(.+?)__/g, "<strong>$1</strong>")
+      .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>")
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+
+    // Unordered list item: - item or * item
+    const ulMatch = line.match(/^[\s]*[-*]\s+(.+)$/);
+    // Ordered list item: 1. item
+    const olMatch = line.match(/^[\s]*\d+\.\s+(.+)$/);
+
+    if (ulMatch) {
+      if (inOl) { html.push("</ol>"); inOl = false; }
+      if (!inUl) { html.push("<ul>"); inUl = true; }
+      html.push(`<li>${ulMatch[1]}</li>`);
+    } else if (olMatch) {
+      if (inUl) { html.push("</ul>"); inUl = false; }
+      if (!inOl) { html.push("<ol>"); inOl = true; }
+      html.push(`<li>${olMatch[1]}</li>`);
+    } else {
+      // Close any open lists
+      if (inUl) { html.push("</ul>"); inUl = false; }
+      if (inOl) { html.push("</ol>"); inOl = false; }
+
+      if (line.trim() === "") {
+        html.push("<br>");
+      } else {
+        html.push(`<p>${line}</p>`);
+      }
+    }
+  }
+
+  // Close any trailing lists
+  if (inUl) html.push("</ul>");
+  if (inOl) html.push("</ol>");
+
+  return html.join("");
 }
 
 // --- Calendar ---
