@@ -1,6 +1,6 @@
 # LinkedIn MCP Server
 
-Read inbox, conversations, send messages, search people, and view profiles on LinkedIn.
+Read inbox, conversations, send messages, search people, view profiles, create posts, and comment on LinkedIn.
 
 ## Auth
 
@@ -31,7 +31,15 @@ patchright install chromium
 | `linkedin_send_message` | Send a message (requires `confirm_send=True`) |
 | `linkedin_search_people` | Search people by keyword |
 | `linkedin_profile` | View a profile by username |
+| `linkedin_create_post` | Create a feed post via Voyager GraphQL API (requires `confirm_post=True`) |
+| `linkedin_add_comment` | Comment on a post via browser automation (requires `confirm_comment=True`) |
 | `linkedin_close` | Close browser session |
+
+## Architecture Notes
+
+**Post creation** uses LinkedIn's Voyager GraphQL API (`voyagerContentcreationDashShares`) — fast, headless, and reliable.
+
+**Comment posting** uses browser UI automation. LinkedIn moved comments to an SDUI (Server-Driven UI) architecture where the comment submission requires session-bound state tokens that only exist when the page is fully rendered. All REST/GraphQL endpoints for comments return 400/404/500 without these tokens.
 
 ## MCP Config
 
@@ -58,6 +66,8 @@ Sessions expire periodically. If tools report "not logged in", call `linkedin_lo
 ## Safety
 
 - `linkedin_send_message` requires `confirm_send=True` — without it, does a dry run
+- `linkedin_create_post` requires `confirm_post=True` — without it, does a dry run
+- `linkedin_add_comment` requires `confirm_comment=True` — without it, does a dry run
 - No credentials stored in config files
 - Session data is in `~/.linkedin-mcp/` with owner-only permissions
-- LinkedIn ToS: automation is against their terms. Use responsibly for personal messaging only
+- LinkedIn ToS: automation is against their terms. Use responsibly for personal use only
