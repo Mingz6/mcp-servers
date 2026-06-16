@@ -9,6 +9,7 @@ import {
     getIndexedFiles,
     getStats,
     initDb,
+    runWriteBatch,
     upsertChunk
 } from "./vector-store.js";
 
@@ -187,16 +188,19 @@ export async function indexFull(
         const vectors = await embed(texts);
         const mtime = stat.mtimeMs;
 
-        for (let i = 0; i < chunks.length; i++) {
-          upsertChunk(
-            file.relativePath,
-            chunks[i].chunkId,
-            chunks[i].text,
-            vectors[i],
-            mtime
-          );
-          chunksUpserted++;
-        }
+        // Wrap per-file writes in one transaction — cuts fsyncs ~N×.
+        runWriteBatch(() => {
+          for (let i = 0; i < chunks.length; i++) {
+            upsertChunk(
+              file.relativePath,
+              chunks[i].chunkId,
+              chunks[i].text,
+              vectors[i],
+              mtime
+            );
+          }
+        });
+        chunksUpserted += chunks.length;
         filesProcessed++;
       } catch (err) {
         const msg = `Error indexing ${file.relativePath}: ${err instanceof Error ? err.message : String(err)}`;
@@ -258,20 +262,21 @@ export async function indexIncremental(
           makeEmbeddingInput(file.relativePath, c.text)
         );
 
-        deleteFile(file.relativePath);
-
         const vectors = await embed(texts);
 
-        for (let i = 0; i < chunks.length; i++) {
-          upsertChunk(
-            file.relativePath,
-            chunks[i].chunkId,
-            chunks[i].text,
-            vectors[i],
-            stat.mtimeMs
-          );
-          chunksUpserted++;
-        }
+        runWriteBatch(() => {
+          deleteFile(file.relativePath);
+          for (let i = 0; i < chunks.length; i++) {
+            upsertChunk(
+              file.relativePath,
+              chunks[i].chunkId,
+              chunks[i].text,
+              vectors[i],
+              stat.mtimeMs
+            );
+          }
+        });
+        chunksUpserted += chunks.length;
         filesProcessed++;
       } catch (err) {
         const msg = `Error indexing ${file.relativePath}: ${err instanceof Error ? err.message : String(err)}`;
