@@ -234,3 +234,14 @@ export function clearAll(): void {
   d.exec("DELETE FROM vec_chunks");
   d.exec("DELETE FROM chunks");
 }
+
+/**
+ * Wrap synchronous DB writes in a single transaction. Cuts fsync count from
+ * O(operations) to O(1) per batch — full rebuild gets ~10-30x faster because
+ * 9k chunks no longer mean 9k autocommits. Caller must keep the body fully
+ * synchronous (no await inside fn).
+ */
+export function runWriteBatch<T>(fn: () => T): T {
+  const d = getDb();
+  return d.transaction(fn)();
+}
