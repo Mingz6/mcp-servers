@@ -1,8 +1,11 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createLogger } from "./logger.js";
 
 export const BRAIN_ROOT_ENV = "BRAIN_MCP_ROOT";
+
+const log = createLogger("brain");
 
 const DEFAULT_IGNORED_DIRS = new Set([
   ".git",
@@ -15,6 +18,26 @@ const DEFAULT_ARCHIVE_DIRS = new Set(["_done", "archive", "archives"]);
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 const DEFAULT_SEARCH_LIMIT = 10;
 const DEFAULT_GRAPH_MAX_NODES = 200;
+
+// In-process content cache for keyword search (mtime + size invalidated).
+// Soft-capped at 5000 entries to bound memory; if exceeded, we stop adding new
+// entries until something is invalidated. The brain is bounded so this rarely
+// matters in practice, but it keeps the cache from growing unbounded if the
+// process is long-lived and walks change.
+type FileCacheEntry = Readonly<{ mtimeMs: number; size: number; content: string }>;
+const fileContentCache = new Map<string, FileCacheEntry>();
+const FILE_CACHE_MAX_ENTRIES = 5000;
+
+function cacheFileContent(absolutePath: string, mtimeMs: number, size: number, content: string): void {
+  if (fileContentCache.size >= FILE_CACHE_MAX_ENTRIES && !fileContentCache.has(absolutePath)) {
+    return;
+  }
+  fileContentCache.set(absolutePath, { mtimeMs, size, content });
+}
+
+export function clearFileContentCache(): void {
+  fileContentCache.clear();
+}
 
 export type BrainFile = Readonly<{
   absolutePath: string;
@@ -167,19 +190,44 @@ export async function searchBrain(
   }
 
   const limit = Math.max(1, Math.min(options.limit ?? DEFAULT_SEARCH_LIMIT, 50));
+  const started = performance.now();
 
-  // --- Keyword search (existing) ---
+  // --- Keyword search (with mtime-checked content cache) ---
   const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
   const files = await listMarkdownFiles(root, options);
   const keywordResults: Array<{ path: string; title: string; score: number; snippet: string }> = [];
 
+  let cacheHits = 0;
+  let cacheMisses = 0;
+  const keywordStart = performance.now();
+
   for (const file of files) {
-    const stat = await fs.stat(file.absolutePath);
+    let stat;
+    try {
+      stat = await fs.stat(file.absolutePath);
+    } catch {
+      // File disappeared between readdir and stat; skip silently.
+      continue;
+    }
     if (stat.size > DEFAULT_MAX_FILE_BYTES) {
       continue;
     }
 
-    const content = await fs.readFile(file.absolutePath, "utf8");
+    const cached = fileContentCache.get(file.absolutePath);
+    let content: string;
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      content = cached.content;
+      cacheHits++;
+    } else {
+      try {
+        content = await fs.readFile(file.absolutePath, "utf8");
+      } catch {
+        continue;
+      }
+      cacheFileContent(file.absolutePath, stat.mtimeMs, stat.size, content);
+      cacheMisses++;
+    }
+
     const haystack = `${file.relativePath}\n${content}`.toLowerCase();
     const hasExactMatch = haystack.includes(normalizedQuery);
     const hasAllTokens = tokens.every((token) => haystack.includes(token));
@@ -198,16 +246,34 @@ export async function searchBrain(
   }
 
   keywordResults.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+  const keywordMs = Math.round(performance.now() - keywordStart);
 
   // --- Semantic search (when index available) ---
+  const semanticStart = performance.now();
   const semanticResults = await searchSemantic(query, limit * 2);
+  const semanticMs = Math.round(performance.now() - semanticStart);
 
   // --- Merge via RRF ---
+  let results: BrainSearchResult[];
   if (semanticResults.length === 0) {
-    return keywordResults.slice(0, limit).map((r) => ({ ...r, matchType: "keyword" as const }));
+    results = keywordResults.slice(0, limit).map((r) => ({ ...r, matchType: "keyword" as const }));
+  } else {
+    results = mergeRRF(keywordResults, semanticResults, limit);
   }
 
-  return mergeRRF(keywordResults, semanticResults, limit);
+  log.info("searchBrain complete", {
+    queryLen: query.length,
+    files: files.length,
+    keywordHits: keywordResults.length,
+    semanticHits: semanticResults.length,
+    cacheHits,
+    cacheMisses,
+    keywordMs,
+    semanticMs,
+    totalMs: Math.round(performance.now() - started),
+  });
+
+  return results;
 }
 
 async function searchSemantic(
@@ -215,10 +281,10 @@ async function searchSemantic(
   topK: number
 ): Promise<Array<{ path: string; chunkId: string; content: string; distance: number }>> {
   try {
-    const { isIndexReady, searchIndex } = await import("./hybrid-bridge.js");
-    if (!isIndexReady()) return [];
-    return searchIndex(query, topK);
-  } catch {
+    const { searchIndex } = await import("./hybrid-bridge.js");
+    return await searchIndex(query, topK);
+  } catch (err) {
+    log.error("hybrid-bridge failed to load or run", err);
     return [];
   }
 }
