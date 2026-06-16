@@ -17,11 +17,14 @@ import {
     validatePageLinks,
 } from "./brain.js";
 import { preflight, verifyCompletion } from "./coupled-actions.js";
+import { checkAoaiHealth } from "./embeddings.js";
 import { indexFull, indexIncremental } from "./indexer.js";
-import { getStats as getIndexStats } from "./vector-store.js";
+import { createLogger, getLastError, getLogFilePath } from "./logger.js";
+import { getStats as getIndexStats, initDb } from "./vector-store.js";
 
+const log = createLogger("server");
 const brainRoot = getBrainRoot();
-const server = new McpServer({ name: "brain", version: "1.0.0" });
+const server = new McpServer({ name: "brain", version: "1.1.0" });
 
 function toolError(err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
@@ -454,16 +457,98 @@ server.tool(
   }
 );
 
+server.tool(
+  "brain_health",
+  "Health check for the brain MCP server. Reports: index DB status, semantic search availability (AOAI reachability), coupled-actions config, and last logged error. Call this when search results look wrong or before debugging the brain.",
+  {
+    checkAoai: z.boolean().default(false).describe("If true, makes a live embedding request to verify AOAI reachability (costs ~$0.000004). Default false for fast checks."),
+  },
+  async ({ checkAoai }) => {
+    const lines: string[] = [];
+    let allOk = true;
+
+    // 1. Brain root
+    lines.push(`Brain root: ${brainRoot}`);
+
+    // 2. Index DB
+    let indexOk = false;
+    try {
+      await initDb();
+      const stats = getIndexStats();
+      indexOk = stats.totalChunks > 0;
+      lines.push(
+        `Index DB: ${indexOk ? "OK" : "EMPTY"} — ${stats.totalFiles} files, ${stats.totalChunks} chunks, ${(stats.dbSizeBytes / 1024 / 1024).toFixed(1)} MB, last indexed: ${stats.lastIndexed ?? "never"}`,
+      );
+      if (!indexOk) allOk = false;
+    } catch (err) {
+      allOk = false;
+      lines.push(`Index DB: FAIL — ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // 3. Env vars (cheap pre-check before optional live AOAI ping)
+    const requiredEnv = ["AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_EMBEDDING_DEPLOYMENT"];
+    const missingEnv = requiredEnv.filter((k) => !process.env[k]);
+    if (missingEnv.length > 0) {
+      allOk = false;
+      lines.push(`AOAI env: MISSING — ${missingEnv.join(", ")} not set in MCP server process`);
+    } else {
+      lines.push(`AOAI env: OK — endpoint, api key, deployment all set`);
+    }
+
+    // 4. AOAI live check (optional)
+    if (checkAoai && missingEnv.length === 0) {
+      const aoai = await checkAoaiHealth();
+      if (aoai.ok) {
+        lines.push(`AOAI live: OK (${aoai.latencyMs}ms)`);
+      } else {
+        allOk = false;
+        lines.push(`AOAI live: FAIL — ${aoai.error} (${aoai.latencyMs}ms)`);
+      }
+    } else if (checkAoai) {
+      lines.push(`AOAI live: SKIPPED — env vars missing`);
+    } else {
+      lines.push(`AOAI live: not checked (pass checkAoai=true to verify)`);
+    }
+
+    // 5. Coupled actions
+    try {
+      const result = preflight("code edited and tests run");
+      const matched = result.matchedActions.length;
+      lines.push(`Coupled actions: ${matched > 0 ? "OK" : "WARN"} — ${matched} rule(s) matched test trigger`);
+      if (matched === 0) allOk = false;
+    } catch (err) {
+      allOk = false;
+      lines.push(`Coupled actions: FAIL — ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // 6. Log file location
+    lines.push(`Log file: ${getLogFilePath() ?? "<stderr only>"}`);
+
+    // 7. Last error
+    const lastErr = getLastError();
+    if (lastErr) {
+      lines.push(`Last error: ${lastErr.at} — ${lastErr.message}`);
+    } else {
+      lines.push(`Last error: <none since startup>`);
+    }
+
+    const verdict = allOk ? "✅ brain MCP healthy" : "❌ brain MCP has issues";
+    return textResult(`${verdict}\n\n${lines.join("\n")}`);
+  }
+);
+
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  log.info("Brain MCP server started", { brainRoot, version: "1.1.0" });
   console.error(`Brain MCP server started. Root: ${brainRoot} (${BRAIN_ROOT_ENV})`);
 }
 
-process.on("unhandledRejection", (err) => { console.error("[brain-mcp] Unhandled rejection:", err); process.exit(1); });
-process.on("uncaughtException", (err) => { console.error("[brain-mcp] Uncaught exception:", err); process.exit(1); });
+process.on("unhandledRejection", (err) => { log.error("Unhandled rejection", err); process.exit(1); });
+process.on("uncaughtException", (err) => { log.error("Uncaught exception", err); process.exit(1); });
 
 main().catch((err) => {
+  log.error("Fatal startup error", err);
   console.error("Fatal:", err);
   process.exit(1);
 });

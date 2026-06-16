@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { embed } from "./embeddings.js";
+import { createLogger } from "./logger.js";
 import {
     clearAll,
     deleteFile,
@@ -10,6 +11,8 @@ import {
     initDb,
     upsertChunk
 } from "./vector-store.js";
+
+const logger = createLogger("indexer");
 
 const IGNORED_DIRS = new Set([
   ".git",
@@ -164,7 +167,15 @@ export async function indexFull(
 
     for (const file of files) {
       try {
-        const stat = await fs.stat(file.absolutePath);
+        let stat;
+        try {
+          stat = await fs.stat(file.absolutePath);
+        } catch (err) {
+          // File disappeared between walk and stat (rename, delete, race).
+          // Skip silently — incremental run picks it up next time.
+          if ((err as NodeJS.ErrnoException)?.code === "ENOENT") continue;
+          throw err;
+        }
         if (stat.size > MAX_FILE_BYTES) continue;
 
         const content = await fs.readFile(file.absolutePath, "utf8");
@@ -190,6 +201,7 @@ export async function indexFull(
       } catch (err) {
         const msg = `Error indexing ${file.relativePath}: ${err instanceof Error ? err.message : String(err)}`;
         errors.push(msg);
+        logger.error("Index error", err, { file: file.relativePath });
         print(`  ${msg}`);
       }
     }
@@ -226,7 +238,13 @@ export async function indexIncremental(
       seenFiles.add(file.relativePath);
 
       try {
-        const stat = await fs.stat(file.absolutePath);
+        let stat;
+        try {
+          stat = await fs.stat(file.absolutePath);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException)?.code === "ENOENT") continue;
+          throw err;
+        }
         if (stat.size > MAX_FILE_BYTES) continue;
 
         const existingMtime = indexed.get(file.relativePath);
@@ -258,6 +276,7 @@ export async function indexIncremental(
       } catch (err) {
         const msg = `Error indexing ${file.relativePath}: ${err instanceof Error ? err.message : String(err)}`;
         errors.push(msg);
+        logger.error("Incremental index error", err, { file: file.relativePath });
         print(`  ${msg}`);
       }
     }
