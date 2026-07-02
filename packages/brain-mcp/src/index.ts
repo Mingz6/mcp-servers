@@ -187,8 +187,8 @@ server.tool(
     try {
       if (validateCitations) {
         const { promises: fs } = await import("node:fs");
-        const { resolveBrainPath } = await import("./brain.js");
-        const absolutePath = resolveBrainPath(brainRoot, path);
+        const { resolveIndexedPath } = await import("./brain.js");
+        const { absolutePath } = await resolveIndexedPath(brainRoot, path);
         const current = await fs.readFile(absolutePath, "utf8");
         if (!current.includes(oldText)) {
           return toolError(new Error("oldText not found in page; cannot validate"));
