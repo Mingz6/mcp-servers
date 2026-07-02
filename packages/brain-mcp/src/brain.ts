@@ -113,6 +113,92 @@ export function ensureMarkdownPath(absolutePath: string): void {
   }
 }
 
+const INDEX_PATHS_ENV = "BRAIN_INDEX_PATHS";
+
+export type IndexRoot = Readonly<{ label: string; absolutePath: string }>;
+
+/**
+ * All configured index roots (BRAIN_INDEX_PATHS), each tagged with a label.
+ * The primary brain root is always first and unlabeled, so every existing
+ * bare brain-relative path (docs/foo.md, copilot/skills/bar.md, ...) keeps
+ * resolving exactly as before. Secondary roots are labeled with their
+ * directory basename (life, crna, worker-center, ...) so their pages can be
+ * addressed unambiguously as "{label}/{path}" and never collide with a
+ * same-named file under a different root.
+ */
+export function getIndexRoots(env: NodeJS.ProcessEnv = process.env): IndexRoot[] {
+  const primaryRoot = getBrainRoot(env);
+  const roots: IndexRoot[] = [{ label: "", absolutePath: primaryRoot }];
+
+  const envPaths = env[INDEX_PATHS_ENV];
+  if (!envPaths) {
+    return roots;
+  }
+
+  const seenLabels = new Set<string>();
+  for (const raw of envPaths.split(",").map((entry) => entry.trim()).filter(Boolean)) {
+    const expanded = raw.startsWith("~") ? path.join(os.homedir(), raw.slice(1)) : raw;
+    const absolutePath = path.resolve(expanded);
+    if (absolutePath === primaryRoot) {
+      continue; // already registered above as the unlabeled primary root
+    }
+
+    const label = path.basename(absolutePath);
+    if (seenLabels.has(label)) {
+      throw new Error(
+        `BRAIN_INDEX_PATHS has two roots named "${label}" \u2014 rename one of the folders, the index would otherwise collide`
+      );
+    }
+    seenLabels.add(label);
+    roots.push({ label, absolutePath });
+  }
+
+  return roots;
+}
+
+/** Namespace a root-relative path with its index-root label (no-op for the unlabeled primary root). */
+export function toLabeledPath(label: string, relativePath: string): string {
+  const posixPath = relativePath.split(path.sep).join("/");
+  return label ? `${label}/${posixPath}` : posixPath;
+}
+
+export type ResolvedIndexedPath = Readonly<{ absolutePath: string; labeledPath: string }>;
+
+/**
+ * Resolve a page path that may be namespaced with a secondary index-root
+ * label (e.g. "life/property/foo.md" when BRAIN_INDEX_PATHS includes
+ * ~/code/life). Tries the primary brain root first, so every existing bare
+ * reference keeps working unchanged; only falls back to a labeled root when
+ * the file doesn't exist under the primary root and the path starts with a
+ * known label prefix.
+ */
+export async function resolveIndexedPath(
+  primaryRoot: string,
+  inputPath: string,
+  indexRoots: ReadonlyArray<IndexRoot> = getIndexRoots()
+): Promise<ResolvedIndexedPath> {
+  const resolvedPrimaryRoot = path.resolve(primaryRoot);
+  const primaryCandidate = resolveBrainPath(resolvedPrimaryRoot, inputPath);
+
+  if (await exists(primaryCandidate)) {
+    return { absolutePath: primaryCandidate, labeledPath: toBrainRelative(resolvedPrimaryRoot, primaryCandidate) };
+  }
+
+  const trimmed = inputPath.trim();
+  for (const indexRoot of indexRoots) {
+    if (!indexRoot.label) continue;
+    const prefix = `${indexRoot.label}/`;
+    if (trimmed !== indexRoot.label && !trimmed.startsWith(prefix)) continue;
+
+    const rest = trimmed === indexRoot.label ? "" : trimmed.slice(prefix.length);
+    const absolutePath = resolveBrainPath(indexRoot.absolutePath, rest || ".");
+    const labeledPath = toLabeledPath(indexRoot.label, toBrainRelative(indexRoot.absolutePath, absolutePath));
+    return { absolutePath, labeledPath };
+  }
+
+  return { absolutePath: primaryCandidate, labeledPath: toBrainRelative(resolvedPrimaryRoot, primaryCandidate) };
+}
+
 export async function listMarkdownFiles(
   root: string,
   options: Readonly<{ includeArchived?: boolean; roots?: ReadonlyArray<string> }> = {}
@@ -160,7 +246,7 @@ export async function readBrainPage(
   inputPath: string,
   maxChars = 12000
 ): Promise<Readonly<{ path: string; title: string; content: string; truncated: boolean }>> {
-  const absolutePath = resolveBrainPath(root, inputPath);
+  const { absolutePath, labeledPath } = await resolveIndexedPath(root, inputPath);
   ensureMarkdownPath(absolutePath);
 
   const content = await fs.readFile(absolutePath, "utf8");
@@ -168,7 +254,7 @@ export async function readBrainPage(
   const visibleContent = truncated ? content.slice(0, maxChars) : content;
 
   return {
-    path: toBrainRelative(path.resolve(root), absolutePath),
+    path: labeledPath,
     title: extractTitle(content, absolutePath),
     content: visibleContent,
     truncated,
@@ -468,8 +554,7 @@ export async function replaceBrainText(
     throw new Error("oldText is required");
   }
 
-  const rootPath = path.resolve(root);
-  const absolutePath = resolveBrainPath(rootPath, inputPath);
+  const { absolutePath, labeledPath } = await resolveIndexedPath(root, inputPath);
   ensureMarkdownPath(absolutePath);
   const content = await fs.readFile(absolutePath, "utf8");
   const replacements = countOccurrences(content, oldText);
@@ -479,7 +564,7 @@ export async function replaceBrainText(
   }
 
   await fs.writeFile(absolutePath, content.replace(oldText, newText), "utf8");
-  return { path: toBrainRelative(rootPath, absolutePath), replacements };
+  return { path: labeledPath, replacements };
 }
 
 export async function captureSource(

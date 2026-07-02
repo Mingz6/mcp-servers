@@ -9,13 +9,16 @@ import {
     createBrainPage,
     ensureMarkdownPath,
     findBacklinks,
+    getIndexRoots,
     linkSourceCitations,
     lintBrain,
     packContext,
     readBrainPage,
     replaceBrainText,
     resolveBrainPath,
+    resolveIndexedPath,
     searchBrain,
+    toLabeledPath,
     validatePageLinks,
 } from "./brain.js";
 
@@ -247,6 +250,115 @@ test("packContext can seed from a query when seedPaths is omitted", async () => 
     });
     assert.ok(pack.seed.includes("docs/topic.md"));
     assert.ok(pack.pages.some((page) => page.path === "docs/topic.md"));
+  });
+});
+
+test("getIndexRoots labels secondary roots by basename and keeps the primary root unlabeled", () => {
+  const env = {
+    BRAIN_MCP_ROOT: "/Users/test/code/brain",
+    BRAIN_INDEX_PATHS: "/Users/test/code/brain,/Users/test/code/life,/Users/test/code/crna",
+  } as unknown as NodeJS.ProcessEnv;
+
+  assert.deepEqual(getIndexRoots(env), [
+    { label: "", absolutePath: "/Users/test/code/brain" },
+    { label: "life", absolutePath: "/Users/test/code/life" },
+    { label: "crna", absolutePath: "/Users/test/code/crna" },
+  ]);
+});
+
+test("getIndexRoots defaults to a single unlabeled root when BRAIN_INDEX_PATHS is unset", () => {
+  const env = { BRAIN_MCP_ROOT: "/Users/test/code/brain" } as unknown as NodeJS.ProcessEnv;
+  assert.deepEqual(getIndexRoots(env), [{ label: "", absolutePath: "/Users/test/code/brain" }]);
+});
+
+test("getIndexRoots rejects two secondary roots with the same basename", () => {
+  const env = {
+    BRAIN_MCP_ROOT: "/Users/test/code/brain",
+    BRAIN_INDEX_PATHS: "/Users/test/code/brain,/Users/test/a/crna,/Users/test/b/crna",
+  } as unknown as NodeJS.ProcessEnv;
+
+  assert.throws(() => getIndexRoots(env), /two roots named "crna"/);
+});
+
+test("toLabeledPath prefixes only when a label is present", () => {
+  assert.equal(toLabeledPath("", "docs/foo.md"), "docs/foo.md");
+  assert.equal(toLabeledPath("life", "property/foo.md"), "life/property/foo.md");
+});
+
+test("resolveIndexedPath falls back to a labeled secondary root, and leaves primary-root paths untouched", async () => {
+  await withBrain(async (root) => {
+    const secondaryRoot = await mkdtemp(path.join(os.tmpdir(), "brain-mcp-secondary-"));
+    try {
+      await mkdir(path.join(secondaryRoot, "property"), { recursive: true });
+      await writeFile(
+        path.join(secondaryRoot, "property", "foo.md"),
+        "# Foo\n\nLives in the secondary root only.\n",
+        "utf8"
+      );
+
+      const indexRoots = [
+        { label: "", absolutePath: root },
+        { label: "life", absolutePath: secondaryRoot },
+      ];
+
+      // Reproduces the reported bug: an unprefixed path that only exists in a
+      // secondary root has no primary-root match and no recognized label, so
+      // it falls through to the (non-existent) primary candidate — the same
+      // ENOENT-on-read outcome as before this fix, for genuinely unknown paths.
+      const unmatched = await resolveIndexedPath(root, "property/foo.md", indexRoots);
+      assert.equal(unmatched.absolutePath, path.join(root, "property", "foo.md"));
+
+      // The fix: a labeled path resolves to the real file in the secondary root.
+      const resolved = await resolveIndexedPath(root, "life/property/foo.md", indexRoots);
+      assert.equal(resolved.absolutePath, path.join(secondaryRoot, "property", "foo.md"));
+      assert.equal(resolved.labeledPath, "life/property/foo.md");
+
+      // Existing bare references into the primary root are unaffected.
+      const primary = await resolveIndexedPath(root, "docs/topic.md", indexRoots);
+      assert.equal(primary.absolutePath, path.join(root, "docs", "topic.md"));
+      assert.equal(primary.labeledPath, "docs/topic.md");
+    } finally {
+      await rm(secondaryRoot, { force: true, recursive: true });
+    }
+  });
+});
+
+test("readBrainPage and replaceBrainText resolve labeled paths from BRAIN_INDEX_PATHS", async () => {
+  await withBrain(async (root) => {
+    const secondaryRoot = await mkdtemp(path.join(os.tmpdir(), "brain-mcp-secondary-"));
+    const previousRoot = process.env["BRAIN_MCP_ROOT"];
+    const previousIndexPaths = process.env["BRAIN_INDEX_PATHS"];
+    try {
+      await mkdir(path.join(secondaryRoot, "property"), { recursive: true });
+      await writeFile(
+        path.join(secondaryRoot, "property", "foo.md"),
+        "# Foo\n\nLives in the secondary root only.\n",
+        "utf8"
+      );
+      process.env["BRAIN_MCP_ROOT"] = root;
+      process.env["BRAIN_INDEX_PATHS"] = `${root},${secondaryRoot}`;
+      const secondaryLabel = path.basename(secondaryRoot);
+
+      const page = await readBrainPage(root, `${secondaryLabel}/property/foo.md`);
+      assert.equal(page.path, `${secondaryLabel}/property/foo.md`);
+      assert.match(page.content, /Lives in the secondary root only/);
+
+      await replaceBrainText(root, page.path, "secondary root only", "secondary root, edited");
+      const edited = await readFile(path.join(secondaryRoot, "property", "foo.md"), "utf8");
+      assert.match(edited, /secondary root, edited/);
+    } finally {
+      if (previousRoot === undefined) {
+        delete process.env["BRAIN_MCP_ROOT"];
+      } else {
+        process.env["BRAIN_MCP_ROOT"] = previousRoot;
+      }
+      if (previousIndexPaths === undefined) {
+        delete process.env["BRAIN_INDEX_PATHS"];
+      } else {
+        process.env["BRAIN_INDEX_PATHS"] = previousIndexPaths;
+      }
+      await rm(secondaryRoot, { force: true, recursive: true });
+    }
   });
 });
 

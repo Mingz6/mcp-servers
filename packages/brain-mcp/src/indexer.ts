@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { getIndexRoots, toLabeledPath } from "./brain.js";
 import { embed } from "./embeddings.js";
 import { createLogger } from "./logger.js";
 import {
@@ -34,30 +34,6 @@ type IndexResult = Readonly<{
   filesDeleted: number;
   errors: string[];
 }>;
-
-function getIndexPaths(): string[] {
-  const envPaths = process.env["BRAIN_INDEX_PATHS"];
-  if (envPaths) {
-    return envPaths
-      .split(",")
-      .map((p) => p.trim())
-      .filter(Boolean)
-      .map((p) =>
-        p.startsWith("~") ? path.join(os.homedir(), p.slice(1)) : p
-      );
-  }
-
-  const brainRoot = process.env["BRAIN_MCP_ROOT"];
-  if (brainRoot) {
-    return [
-      brainRoot.startsWith("~")
-        ? path.join(os.homedir(), brainRoot.slice(1))
-        : brainRoot,
-    ];
-  }
-
-  return [path.join(os.homedir(), "code", "brain")];
-}
 
 async function walkMarkdownFiles(
   rootDir: string
@@ -151,8 +127,8 @@ export async function indexFull(
   log?: (msg: string) => void
 ): Promise<IndexResult> {
   const print = log ?? console.log;
-  const indexPaths = getIndexPaths();
-  print(`Full index: ${indexPaths.length} root(s)`);
+  const indexRoots = getIndexRoots();
+  print(`Full index: ${indexRoots.length} root(s)`);
 
   await initDb(dbPath);
   clearAll();
@@ -161,12 +137,13 @@ export async function indexFull(
   let chunksUpserted = 0;
   const errors: string[] = [];
 
-  for (const rootDir of indexPaths) {
-    print(`Scanning ${rootDir}...`);
-    const files = await walkMarkdownFiles(rootDir);
+  for (const indexRoot of indexRoots) {
+    print(`Scanning ${indexRoot.absolutePath}${indexRoot.label ? ` (${indexRoot.label})` : ""}...`);
+    const files = await walkMarkdownFiles(indexRoot.absolutePath);
     print(`  Found ${files.length} .md files`);
 
     for (const file of files) {
+      const labeledPath = toLabeledPath(indexRoot.label, file.relativePath);
       try {
         let stat;
         try {
@@ -180,9 +157,9 @@ export async function indexFull(
         if (stat.size > MAX_FILE_BYTES) continue;
 
         const content = await fs.readFile(file.absolutePath, "utf8");
-        const chunks = chunkByHeading(content, file.relativePath);
+        const chunks = chunkByHeading(content, labeledPath);
         const texts = chunks.map((c) =>
-          makeEmbeddingInput(file.relativePath, c.text)
+          makeEmbeddingInput(labeledPath, c.text)
         );
 
         const vectors = await embed(texts);
@@ -192,7 +169,7 @@ export async function indexFull(
         runWriteBatch(() => {
           for (let i = 0; i < chunks.length; i++) {
             upsertChunk(
-              file.relativePath,
+              labeledPath,
               chunks[i].chunkId,
               chunks[i].text,
               vectors[i],
@@ -203,9 +180,9 @@ export async function indexFull(
         chunksUpserted += chunks.length;
         filesProcessed++;
       } catch (err) {
-        const msg = `Error indexing ${file.relativePath}: ${err instanceof Error ? err.message : String(err)}`;
+        const msg = `Error indexing ${labeledPath}: ${err instanceof Error ? err.message : String(err)}`;
         errors.push(msg);
-        logger.error("Index error", err, { file: file.relativePath });
+        logger.error("Index error", err, { file: labeledPath });
         print(`  ${msg}`);
       }
     }
@@ -223,8 +200,8 @@ export async function indexIncremental(
   log?: (msg: string) => void
 ): Promise<IndexResult> {
   const print = log ?? console.log;
-  const indexPaths = getIndexPaths();
-  print(`Incremental index: ${indexPaths.length} root(s)`);
+  const indexRoots = getIndexRoots();
+  print(`Incremental index: ${indexRoots.length} root(s)`);
 
   await initDb(dbPath);
   const indexed = getIndexedFiles();
@@ -235,11 +212,12 @@ export async function indexIncremental(
   const errors: string[] = [];
   const seenFiles = new Set<string>();
 
-  for (const rootDir of indexPaths) {
-    const files = await walkMarkdownFiles(rootDir);
+  for (const indexRoot of indexRoots) {
+    const files = await walkMarkdownFiles(indexRoot.absolutePath);
 
     for (const file of files) {
-      seenFiles.add(file.relativePath);
+      const labeledPath = toLabeledPath(indexRoot.label, file.relativePath);
+      seenFiles.add(labeledPath);
 
       try {
         let stat;
@@ -251,24 +229,24 @@ export async function indexIncremental(
         }
         if (stat.size > MAX_FILE_BYTES) continue;
 
-        const existingMtime = indexed.get(file.relativePath);
+        const existingMtime = indexed.get(labeledPath);
         if (existingMtime !== undefined && Math.abs(stat.mtimeMs - existingMtime) < 1000) {
           continue;
         }
 
         const content = await fs.readFile(file.absolutePath, "utf8");
-        const chunks = chunkByHeading(content, file.relativePath);
+        const chunks = chunkByHeading(content, labeledPath);
         const texts = chunks.map((c) =>
-          makeEmbeddingInput(file.relativePath, c.text)
+          makeEmbeddingInput(labeledPath, c.text)
         );
 
         const vectors = await embed(texts);
 
         runWriteBatch(() => {
-          deleteFile(file.relativePath);
+          deleteFile(labeledPath);
           for (let i = 0; i < chunks.length; i++) {
             upsertChunk(
-              file.relativePath,
+              labeledPath,
               chunks[i].chunkId,
               chunks[i].text,
               vectors[i],
@@ -279,9 +257,9 @@ export async function indexIncremental(
         chunksUpserted += chunks.length;
         filesProcessed++;
       } catch (err) {
-        const msg = `Error indexing ${file.relativePath}: ${err instanceof Error ? err.message : String(err)}`;
+        const msg = `Error indexing ${labeledPath}: ${err instanceof Error ? err.message : String(err)}`;
         errors.push(msg);
-        logger.error("Incremental index error", err, { file: file.relativePath });
+        logger.error("Incremental index error", err, { file: labeledPath });
         print(`  ${msg}`);
       }
     }

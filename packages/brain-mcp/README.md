@@ -35,6 +35,26 @@ Override when needed:
 BRAIN_MCP_ROOT=/path/to/brain ./run.sh
 ```
 
+### Indexing multiple repos
+
+`brain_index` (and the CLI) can index more than just the primary root. Set
+`BRAIN_INDEX_PATHS` to a comma-separated list of directories:
+
+```bash
+BRAIN_INDEX_PATHS=~/code/brain,~/code/life,~/code/crna ./run.sh
+```
+
+The primary root (`BRAIN_MCP_ROOT`) is always included and stays **unlabeled**
+— every existing bare reference like `docs/foo.md` keeps resolving exactly as
+before. Every other configured root is labeled with its directory basename
+(`life`, `crna`, ...), and its pages are addressed as `{label}/{path}`, e.g.
+`life/property/foo.md`. This keeps files with the same relative path in
+different roots (two `README.md`s, for example) from colliding in the index.
+`brain_read` and `brain_replace_text` understand these labeled paths
+automatically; other tools (`brain_backlinks`, `brain_lint`, `brain_graph`,
+`brain_create_page`, `brain_capture_source`) intentionally stay scoped to the
+primary root, since they operate on the curated wiki's own link graph.
+
 ## Build And Test
 
 ```bash
