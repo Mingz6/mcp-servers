@@ -4,6 +4,23 @@
 Reads encrypted WeChat SQLCipher databases using cached keys.
 Read-only — sending is not supported (see README.md for why).
 
+STATUS: BROKEN as of 2026-06-16, retested 2026-07-07 — still broken
+  WeChat 4.1+ changed how WCDB stores derived keys in process memory.
+  extract_key.py scans for keys near DB salts but finds 0/32 verified.
+  Re-signing the app (removing Hardened Runtime) did not help.
+  All MCP tools will return empty results or raise FileNotFoundError until
+  extract_key.py is updated to use a new memory extraction strategy.
+  2026-07-07 retest on WeChat 4.1.11.23: also tried Thearas/wechat-db-decrypt-macos's
+  lldb-based scanner (different implementation, same underlying assumption).
+  lldb attached fine WITHOUT disabling SIP (re-signing alone was enough) — but
+  its full-memory scan also found 0 hex-pattern matches. Two independent
+  scanners agree the plaintext `x'<hex>'` key string is no longer cached
+  anywhere in readable process memory on this build. Not a tooling or
+  permissions problem — the data isn't there. Only a breakpoint/hook at key
+  derivation time (not memory scanning) could work now; see README.md.
+  Track: cocohahaha/wechat-decrypt-macos + our packages/wechat/extract_key.py
+  Reminder to retry: ~2026-10-01
+
 Usage:
   # Start via MCP config (see README.md)
   # Or run directly for testing:
