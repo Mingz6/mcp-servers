@@ -106,6 +106,54 @@ cp /tmp/wechat_key.txt ~/.wechat-export/.primary_key.txt
 | Keys don't work after restart | Re-run `extract_key.py` — WCDB regenerates keys on restart |
 | WeChat won't launch after re-sign | Reinstall from wechat.com, then re-sign |
 | `Operation not permitted` | Run with `sudo` |
+
+## Known Issue: WeChat 4.1+ Key Extraction (since ~June 2026)
+
+WeChat 4.1+ changed how WCDB handles the derived key in memory. Re-signing
+still gets `task_for_pid` working, but the static memory scan (`extract_key.py`,
+including the salt-anchor fallback added for 4.1+) has been finding 0/N verified
+keys on the last few attempts. Current status lives in the `STATUS` docstring at
+the top of `mcp_server.py` — check there before assuming this is fixed.
+
+**Community alternatives evaluated (2026-07-07)**, in response to a WeChat-decrypt
+roundup that surfaced three new repos targeting WeChat 4.1.x:
+
+| Repo | Technique | Verdict |
+|------|-----------|---------|
+| [Thearas/wechat-db-decrypt-macos](https://github.com/Thearas/wechat-db-decrypt-macos) (627★, **archived**) | `lldb`-based memory scan (`find_key_memscan.py`), not raw Mach VM API | Different technique from ours — plausible it still works where ours doesn't, since lldb gets broader memory access. **Requires disabling SIP** (`csrutil disable`). Untested against 4.1.11.23 (they tested 4.1.2.241). Archived = no upstream fixes if it breaks again. |
+| [xingfanxia/wechat-mac-reader](https://github.com/xingfanxia/wechat-mac-reader) (7★) | Wrapper: Thearas' extractor + `chatlog-bot` (Go HTTP/MCP server) + a separate Accessibility-API "send" MCP | Just glues Thearas' extraction to a different serving layer. Adopting the whole stack is unnecessary — our own `mcp_server.py`/`export_messages.py` already consume the same `wechat_keys.json` shape. If Thearas' extractor works, point it at our tooling instead of theirs. |
+| [lawchito0813-sketch/wechat-export-macos-x86](https://github.com/lawchito0813-sketch/wechat-export-macos-x86) (6★) | AI-assisted export | Explicitly doesn't support the current WeChat version. Skip. |
+
+**Tested 2026-07-07 — Thearas' `lldb` approach does NOT solve this either.**
+Cloned it to `~/code/playground/_watchlist/wechat-db-decrypt-macos` and ran
+`find_key_memscan.py` against our already ad-hoc-re-signed WeChat (hardened
+runtime already stripped by `refresh-wechat.sh` step 2):
+
+- **lldb attached fine without disabling SIP.** Their documented "SIP must be
+  disabled" prerequisite is a non-issue once the target app is already
+  ad-hoc re-signed — SIP was never actually the blocker. Don't bother
+  disabling SIP for this; it wouldn't have changed the outcome below.
+- **Full memory scan (2559MB, 100% of readable regions) found ZERO
+  `x'<hex>'` pattern matches** in the main WeChat process. Our own
+  `extract_key.py`'s primary scan agrees (`raw_matches=0` for the WeChat
+  process). Two independently-implemented scanners (raw Mach VM API vs
+  lldb `ReadMemory`) agree: **the plaintext hex-encoded key string is not
+  present anywhere in readable WeChat process memory on 4.1.11.23.**
+  This isn't a memory-access-permission problem — the data simply isn't
+  there to find, on either tool.
+- Conclusion: switching extraction *tooling* doesn't help, because both
+  tools rely on the same assumption (WCDB caches the derived key as a
+  plaintext hex string) and that assumption no longer holds on current
+  WeChat builds. A fix would need a fundamentally different technique —
+  e.g. a breakpoint/hook at the exact moment the key is computed/used,
+  before WCDB clears it. We already spent ~20 hours on Frida-based hooking
+  for the (unrelated) send-message problem and hit a fully-stripped,
+  zero-symbol binary — the same obstacle would apply here.
+- No further action recommended until either Tencent's client changes
+  again, or a new community technique specifically targeting key capture
+  *at derivation time* (not memory scanning) surfaces. Reminder-to-retry
+  bumped to ~2026-10-01 in `mcp_server.py`'s status docstring.
+
 ## MCP Server
 
 ### Setup (one-time)
