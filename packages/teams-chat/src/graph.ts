@@ -425,6 +425,177 @@ export async function getCalendarEvents(
   return events;
 }
 
+// --- Meeting Transcripts ---
+
+export interface MeetingSummary {
+  id: string;
+  subject: string;
+  start: string;
+  joinUrl: string | null;
+  hasTranscript?: boolean;
+}
+
+export async function listRecentMeetings(daysBack = 30, limit = 10): Promise<MeetingSummary[]> {
+  const end = new Date();
+  const start = new Date(end.getTime() - daysBack * 24 * 60 * 60 * 1000);
+
+  const data = await graphFetch(
+    "/me/calendarView",
+    {
+      startDateTime: start.toISOString(),
+      endDateTime: end.toISOString(),
+      $top: "50",
+      $orderby: "start/dateTime desc",
+      $select: "id,subject,start,isOnlineMeeting,onlineMeeting",
+    },
+    { Prefer: 'outlook.timezone="America/Edmonton"' }
+  );
+
+  const meetings: MeetingSummary[] = [];
+  for (const e of data.value || []) {
+    if (!e.isOnlineMeeting || !e.onlineMeeting?.joinUrl) continue;
+    meetings.push({
+      id: e.id,
+      subject: e.subject || "(no subject)",
+      start: e.start?.dateTime || "",
+      joinUrl: e.onlineMeeting?.joinUrl || null,
+    });
+    if (meetings.length >= limit) break;
+  }
+  return meetings;
+}
+
+async function resolveOnlineMeetingId(joinUrl: string): Promise<string | null> {
+  try {
+    const data = await graphFetch(
+      "/me/onlineMeetings",
+      { $filter: `JoinWebUrl eq '${joinUrl}'` }
+    );
+    return data.value?.[0]?.id ?? null;
+  } catch {
+    // Try decoded URL
+    try {
+      const decoded = decodeURIComponent(joinUrl);
+      const data = await graphFetch(
+        "/me/onlineMeetings",
+        { $filter: `JoinWebUrl eq '${decoded}'` }
+      );
+      return data.value?.[0]?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+function cleanVtt(rawVtt: string): string {
+  const lines = rawVtt.split("\n");
+  const out: string[] = [];
+  let currentSpeaker = "";
+  let currentText = "";
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || line === "WEBVTT" || /^\d+$/.test(line) ||
+        /^[0-9]{2}:[0-9]{2}:[0-9]{2}/.test(line) || line.startsWith("NOTE")) {
+      continue;
+    }
+    // <v Speaker Name>text</v>
+    const vMatch = line.match(/^<v ([^>]+)>(.+?)(?:<\/v>)?$/);
+    if (vMatch) {
+      const [, speaker, text] = vMatch;
+      if (speaker === currentSpeaker) {
+        currentText += " " + text.trim();
+      } else {
+        if (currentSpeaker && currentText) {
+          out.push(`${currentSpeaker}: ${currentText}`);
+        }
+        currentSpeaker = speaker;
+        currentText = text.trim();
+      }
+    } else if (line && currentSpeaker) {
+      // continuation line without <v> tag
+      currentText += " " + line;
+    }
+  }
+  if (currentSpeaker && currentText) {
+    out.push(`${currentSpeaker}: ${currentText}`);
+  }
+  return out.join("\n");
+}
+
+export async function getMeetingTranscript(meetingName: string, meetingDate?: string): Promise<string> {
+  // Step 1: Find matching calendar events
+  const daysBack = 30;
+  const end = new Date();
+  const start = new Date(end.getTime() - daysBack * 24 * 60 * 60 * 1000);
+
+  const data = await graphFetch(
+    "/me/calendarView",
+    {
+      startDateTime: start.toISOString(),
+      endDateTime: end.toISOString(),
+      $top: "50",
+      $select: "id,subject,start,isOnlineMeeting,onlineMeeting",
+    },
+    { Prefer: 'outlook.timezone="America/Edmonton"' }
+  );
+
+  const lower = meetingName.toLowerCase();
+  let candidates = (data.value || []).filter(
+    (e: any) => e.isOnlineMeeting && e.onlineMeeting?.joinUrl &&
+      (e.subject || "").toLowerCase().includes(lower)
+  );
+
+  if (meetingDate) {
+    const dateStr = meetingDate.slice(0, 10);
+    candidates = candidates.filter(
+      (e: any) => (e.start?.dateTime || "").startsWith(dateStr)
+    );
+  }
+
+  if (candidates.length === 0) {
+    throw new Error(`No Teams meetings found matching "${meetingName}"${meetingDate ? ` on ${meetingDate}` : " in the last 30 days"}. Try teams_list_recent_meetings to browse available meetings.`);
+  }
+
+  // Step 2: Resolve first match to online meeting ID
+  const event = candidates[0];
+  const meetingId = await resolveOnlineMeetingId(event.onlineMeeting.joinUrl);
+  if (!meetingId) {
+    throw new Error(`Could not resolve online meeting ID for "${event.subject}". The meeting may be cross-tenant or the join URL is no longer valid.`);
+  }
+
+  // Step 3: List transcripts
+  const transcriptsData = await graphFetch(`/me/onlineMeetings/${encodeURIComponent(meetingId)}/transcripts`);
+  const transcripts = transcriptsData.value || [];
+  if (transcripts.length === 0) {
+    throw new Error(`No transcripts available for "${event.subject}". Transcription must be started during the meeting by a participant.`);
+  }
+
+  // Step 4: Download the most recent transcript as VTT
+  const tid = transcripts[transcripts.length - 1].id;
+  const token = await (await import("./auth.js")).getAccessToken();
+  const vttUrl = `https://graph.microsoft.com/v1.0/me/onlineMeetings/${encodeURIComponent(meetingId)}/transcripts/${encodeURIComponent(tid)}/content?$format=text/vtt`;
+  const response = await fetch(vttUrl, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "text/vtt" },
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Graph API ${response.status} fetching transcript: ${body}`);
+  }
+  const rawVtt = await response.text();
+
+  const cleaned = cleanVtt(rawVtt);
+  const header = [
+    `Meeting: ${event.subject}`,
+    `Date: ${event.start?.dateTime || "unknown"}`,
+    `Meeting link: ${event.onlineMeeting?.joinUrl || "n/a"}`,
+    `Transcript ID: ${tid}`,
+    "---",
+    "",
+  ].join("\n");
+  return header + cleaned;
+}
+
 // --- Image / Hosted Content ---
 
 function extractHostedContentIds(html: string): string[] {

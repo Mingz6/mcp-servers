@@ -3,6 +3,7 @@ import {
     type DeviceCodeRequest,
     type TokenCacheContext,
 } from "@azure/msal-node";
+import { spawn } from "child_process";
 import { mkdir, readFile, rename, unlink, writeFile } from "fs/promises";
 import { homedir } from "os";
 import { join } from "path";
@@ -19,6 +20,33 @@ const SCOPES = [
 ];
 
 let msalInstance: PublicClientApplication | null = null;
+
+/** Thrown when sign-in is required. Carries the code/URL to show the user and the in-flight token promise. */
+export class AuthPendingError extends Error {
+  constructor(
+    message: string,
+    public readonly verificationUri: string,
+    public readonly userCode: string,
+    public readonly expiresAt: number,
+    public readonly tokenPromise: Promise<string>
+  ) {
+    super(message);
+    this.name = "AuthPendingError";
+  }
+}
+
+// Tracks an in-flight device code sign-in so rapid/concurrent tool calls surface the
+// same pending code instead of requesting a new one on every call.
+let pendingAuth: AuthPendingError | null = null;
+
+function tryOpenBrowser(url: string): void {
+  const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+  try {
+    spawn(opener, [url], { stdio: "ignore", detached: true }).unref();
+  } catch {
+    // best-effort only — the printed URL still works if this fails
+  }
+}
 
 async function loadCache(): Promise<string | undefined> {
   try {
@@ -80,6 +108,75 @@ export async function getMsalInstance(): Promise<PublicClientApplication> {
   return msalInstance;
 }
 
+// Starts (or reuses) a device code sign-in. Resolves as soon as the code is ready to
+// show — it does NOT wait for the user to finish signing in. Polling for completion
+// continues in the background so a later retry succeeds silently once they do.
+async function startOrReusePendingAuth(pca: PublicClientApplication): Promise<AuthPendingError> {
+  if (pendingAuth && pendingAuth.expiresAt > Date.now()) {
+    return pendingAuth;
+  }
+
+  let settleCodeReady: (v: { verificationUri: string; userCode: string; expiresIn: number }) => void;
+  const codeReady = new Promise<{ verificationUri: string; userCode: string; expiresIn: number }>((resolve) => {
+    settleCodeReady = resolve;
+  });
+
+  const request: DeviceCodeRequest = {
+    scopes: SCOPES,
+    deviceCodeCallback: (response) => {
+      console.error(`\n🔐 MS Loop MCP — Sign in required:`);
+      console.error(response.message);
+      console.error();
+      tryOpenBrowser(response.verificationUri);
+      settleCodeReady({
+        verificationUri: response.verificationUri,
+        userCode: response.userCode,
+        expiresIn: response.expiresIn,
+      });
+    },
+  };
+
+  const tokenPromise = pca.acquireTokenByDeviceCode(request).then((result) => {
+    if (!result) throw new Error("Authentication failed — no token received from device code flow");
+    return result.accessToken;
+  });
+
+  // Never let the background poll crash the process on expiry/failure — just clear the pending state.
+  tokenPromise
+    .catch((err) => {
+      console.error(`[ms-loop] Background sign-in ended without success: ${(err as Error).message}`);
+    })
+    .finally(() => {
+      if (pendingAuth?.tokenPromise === tokenPromise) pendingAuth = null;
+    });
+
+  // Race the code becoming available against the whole flow failing before that happens
+  // (e.g. bad client ID) — otherwise a hard failure here would hang forever.
+  const outcome = await Promise.race([
+    codeReady.then((code) => ({ ok: true as const, code })),
+    tokenPromise.then(
+      () => ({ ok: false as const, error: new Error("Device code flow ended before a code was issued.") }),
+      (error: Error) => ({ ok: false as const, error })
+    ),
+  ]);
+
+  if (!outcome.ok) throw outcome.error;
+
+  const expiresAt = Date.now() + outcome.code.expiresIn * 1000;
+  pendingAuth = new AuthPendingError(
+    `AUTH_REQUIRED: Sign in to Microsoft Loop to continue.\n` +
+      `1. Open ${outcome.code.verificationUri} (a browser tab was also opened automatically)\n` +
+      `2. Enter code: ${outcome.code.userCode}\n` +
+      `Expires in ~${Math.max(1, Math.round(outcome.code.expiresIn / 60))} min. ` +
+      `Sign-in keeps working in the background — just retry this tool after you finish.`,
+    outcome.code.verificationUri,
+    outcome.code.userCode,
+    expiresAt,
+    tokenPromise
+  );
+  return pendingAuth;
+}
+
 export async function getAccessToken(): Promise<string> {
   const pca = await getMsalInstance();
 
@@ -90,27 +187,23 @@ export async function getAccessToken(): Promise<string> {
         account: accounts[0],
         scopes: SCOPES,
       });
+      pendingAuth = null; // signed in — clear any stale pending sign-in state
       return result.accessToken;
     } catch {
       // Silent failed — fall through to device code
     }
   }
 
-  const request: DeviceCodeRequest = {
-    scopes: SCOPES,
-    deviceCodeCallback: (response) => {
-      console.error(`\n🔐 MS Loop MCP — Sign in required:`);
-      console.error(response.message);
-      console.error();
-    },
-  };
+  // Fail fast with the sign-in code instead of blocking the caller for up to ~15 min.
+  throw await startOrReusePendingAuth(pca);
+}
 
-  const result = await pca.acquireTokenByDeviceCode(request);
-  if (!result) {
-    throw new Error(
-      "Authentication failed — no token received from device code flow"
-    );
+export async function clearTokenCache(): Promise<void> {
+  try {
+    await unlink(CACHE_PATH);
+  } catch {
+    // Already gone — fine
   }
-
-  return result.accessToken;
+  msalInstance = null;
+  pendingAuth = null;
 }

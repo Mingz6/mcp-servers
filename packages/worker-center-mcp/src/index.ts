@@ -178,22 +178,23 @@ server.tool(
 
 server.tool(
   "job_pipeline",
-  "View job application verdict cache — what was applied to, skipped, and why.",
+  "View job application verdict cache — what was applied to, skipped, and why. verdict_json contains the full decision.",
   {
-    status: z.string().optional().describe("Filter by verdict (apply, skip, maybe). Omit for all."),
+    status: z.string().optional().describe("Filter by verdict inside verdict_json (apply, skip, maybe). Omit for all."),
     limit: z.number().min(1).max(100).default(30).describe("Max results."),
   },
   async ({ status, limit }) => {
     try {
       const db = getDb();
-      let sql = `SELECT * FROM job_verdict_cache WHERE 1=1`;
+      let sql = `SELECT source, job_id, verdict_json, cached_at FROM job_verdict_cache WHERE 1=1`;
       const params: unknown[] = [];
 
       if (status) {
-        sql += " AND verdict = ?";
+        // verdict_json is a JSON blob; extract the "verdict" field via json_extract
+        sql += ` AND json_extract(verdict_json, '$.verdict') = ?`;
         params.push(status);
       }
-      sql += " ORDER BY rowid DESC LIMIT ?";
+      sql += " ORDER BY cached_at DESC LIMIT ?";
       params.push(limit);
 
       const rows = db.prepare(sql).all(...params) as Record<string, unknown>[];

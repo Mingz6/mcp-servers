@@ -6,8 +6,10 @@ import {
     findChatByParticipant,
     getCalendarEvents,
     getMessageHostedContent,
+    getMeetingTranscript,
     getMyProfile,
     listChats,
+    listRecentMeetings,
     reactToMessage,
     readChatMessages,
     sendMessage,
@@ -398,6 +400,47 @@ server.tool(
           },
         ],
       };
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "teams_list_recent_meetings",
+  "List recent Microsoft Teams online meetings for the signed-in user, with transcript availability. Use before teams_get_meeting_transcript to find the right meeting name.",
+  {
+    daysBack: z.number().min(1).max(60).default(30).describe("How many days back to search (default 30)"),
+    limit: z.number().min(1).max(50).default(10).describe("Max meetings to return (default 10)"),
+  },
+  async ({ daysBack, limit }) => {
+    try {
+      const meetings = await listRecentMeetings(daysBack, limit);
+      if (meetings.length === 0) {
+        return { content: [{ type: "text" as const, text: "No Teams meetings found in the specified range." }] };
+      }
+      const lines = meetings.map((m, i) => {
+        const date = m.start ? new Date(m.start).toLocaleString() : "unknown";
+        return `${i + 1}. **${m.subject}** — ${date}`;
+      });
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "teams_get_meeting_transcript",
+  "Retrieve and clean the transcript for a specific Teams meeting. Returns speaker-attributed text ready for summarisation. Use teams_list_recent_meetings first to find the exact meeting name.",
+  {
+    meetingName: z.string().describe("Meeting subject to search for (partial match, case-insensitive)"),
+    meetingDate: z.string().optional().describe("Optional date filter (YYYY-MM-DD) to narrow results"),
+  },
+  async ({ meetingName, meetingDate }) => {
+    try {
+      const transcript = await getMeetingTranscript(meetingName, meetingDate);
+      return { content: [{ type: "text" as const, text: transcript }] };
     } catch (err) {
       return toolError(err);
     }

@@ -2,12 +2,12 @@
  * Quick test: authenticates and lists your 5 most recent chats.
  * Run: npm run build && npm run auth-test
  */
-import { getAccessToken } from "./auth.js";
+import { getAccessTokenInteractive } from "./auth.js";
 import { getMyProfile, listChats } from "./graph.js";
 
 async function main() {
   console.log("Authenticating...");
-  const token = await getAccessToken();
+  const token = await getAccessTokenInteractive();
   console.log("✅ Got access token\n");
 
   const profile = await getMyProfile();
