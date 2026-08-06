@@ -1,5 +1,13 @@
 import { ImapFlow, type FetchMessageObject, type SearchObject } from "imapflow";
-import { simpleParser, type AttachmentStream } from "mailparser";
+import { simpleParser } from "mailparser";
+
+// imapflow's AuthenticationFailure class exists internally (lib/tools.js) but is NOT
+// re-exported from the package's main entry — confirmed via `node -e "import('imapflow').then(m=>console.log(Object.keys(m)))"`
+// (only ImapFlow/default/module.exports). Duck-type on the properties it sets instead
+// of importing/instanceof-checking a class that doesn't actually exist at that path.
+function isAuthFailure(err: unknown): err is Error & { authenticationFailed: true; response?: string; serverResponseCode?: string } {
+  return err instanceof Error && (err as any).authenticationFailed === true;
+}
 
 export interface MailSummary {
   uid: number;
@@ -67,11 +75,18 @@ async function withClient<T>(fn: (client: ImapFlow) => Promise<T>): Promise<T> {
   try {
     await client.connect();
   } catch (err) {
+    if (isAuthFailure(err)) {
+      throw new Error(
+        `Could not sign in to ${label} (${user}) via IMAP — server said: "${err.response || err.message}"` +
+          (err.serverResponseCode ? ` [${err.serverResponseCode}]` : "") +
+          `. Check IMAP_MCP_PASSWORD is a current app password/authorization code (no extra spaces), and that ` +
+          `IMAP access is actually enabled in the account's mail settings — see README.md.`
+      );
+    }
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `Could not sign in to ${label} (${user}) via IMAP: ${message}. ` +
-        `Check IMAP_MCP_PASSWORD is a current app password/authorization code, not your normal account password ` +
-        `— see README.md for how to generate one.`
+      `Could not connect to ${label} (${user}) via IMAP: ${message}. ` +
+        `Check IMAP_MCP_HOST/IMAP_MCP_PORT are correct and the network allows the connection.`
     );
   }
 
