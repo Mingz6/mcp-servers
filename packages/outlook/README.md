@@ -57,6 +57,46 @@ Token cache: `~/.mcp-outlook/token-cache.json` (atomic-write + corrupt-cache rec
 
 To force re-auth, delete the cache file.
 
+## Multiple accounts (e.g. personal outlook.com alongside work M365)
+
+This server reads its client ID, tenant, and cache dir entirely from env vars, so a second
+mailbox just needs a second `mcp.json` entry pointing at the same `run.sh` with different env:
+
+```jsonc
+"outlook-personal": {
+  "type": "stdio",
+  "command": "${userHome}/code/personal/mcp-servers/packages/outlook/run.sh",
+  "env": {
+    "OUTLOOK_MCP_CLIENT_ID": "<separate app registration id>",
+    "OUTLOOK_MCP_TENANT_ID": "consumers",       // personal Microsoft accounts only; use "common" for either
+    "OUTLOOK_MCP_CACHE_DIR": "${userHome}/.mcp-outlook-personal"
+  }
+}
+```
+
+**Why a separate Azure AD app is required**: the work app (`Ming Dev Tools`, shared with
+`teams-chat`) has `signInAudience: AzureADMyOrg` — locked to one work tenant, personal
+Microsoft accounts (like a plain outlook.com/hotmail.com address) cannot sign into it at all.
+A personal-account app needs `signInAudience: AzureADandPersonalMicrosoftAccount` (or
+`PersonalMicrosoftAccount`) instead:
+
+```bash
+az ad app create --display-name "Ming Personal Mail MCP" \
+  --sign-in-audience AzureADandPersonalMicrosoftAccount --is-fallback-public-client true
+az ad sp create --id <new appId>
+az ad app permission add --id <new appId> --api 00000003-0000-0000-c000-000000000000 \
+  --api-permissions 024d486e-b451-40bb-833d-3e66d98c5c73=Scope e383f46e-2787-4529-855e-0e479a3ffac0=Scope e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope
+```
+
+`OUTLOOK_MCP_CACHE_DIR` is required whenever you run a second instance — without it both
+instances share `~/.mcp-outlook/token-cache.json` and each sign-in clobbers the other's cached
+token. First run after adding a new instance still needs an interactive device-code sign-in
+(reload/restart VS Code to pick up the new server, then call any tool — it prints a URL + code).
+
+**Why this fixes the Apple Mail body-sync gotcha**: Graph API returns the full message body
+directly in the API response (no local cache/sync layer), unlike `applemail_read` which depends
+on Mail.app having already fetched and persisted that specific message locally.
+
 ## Sending behavior
 
 `outlook_send` defaults to **draft mode** — the message lands in your Drafts folder, not the recipient's inbox. Pass `draft: false` (after explicit user confirmation in the chat) to actually send.

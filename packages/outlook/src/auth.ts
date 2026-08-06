@@ -8,7 +8,9 @@ import { mkdir, readFile, rename, unlink, writeFile } from "fs/promises";
 import { homedir } from "os";
 import { join } from "path";
 
-const CACHE_DIR = join(homedir(), ".mcp-outlook");
+// Override via OUTLOOK_MCP_CACHE_DIR so a second instance (different account/app
+// registration) doesn't clobber this one's cached token.
+const CACHE_DIR = process.env.OUTLOOK_MCP_CACHE_DIR || join(homedir(), ".mcp-outlook");
 const CACHE_PATH = join(CACHE_DIR, "token-cache.json");
 const CACHE_TMP_PATH = `${CACHE_PATH}.tmp`;
 
