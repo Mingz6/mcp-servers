@@ -15,7 +15,8 @@
     "build:discord-user": "npm run build -w packages/discord-user",
     "build:flywheel": "npm run build -w packages/flywheel",
     "build:ms-loop": "npm run build -w packages/ms-loop",
-    "build:worker-center-mcp": "npm run build -w packages/worker-center-mcp"
+    "build:worker-center-mcp": "npm run build -w packages/worker-center-mcp",
+    "build:imap-mail": "npm run build -w packages/imap-mail"
   },
   "engines": {
     "node": ">=18.0.0"
