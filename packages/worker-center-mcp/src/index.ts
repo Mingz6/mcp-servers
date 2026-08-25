@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { getDb } from "./db.js";
+import { getFreshDb } from "./freshness.js";
 
 const server = new McpServer({ name: "worker-center", version: "1.0.0" });
 
@@ -13,8 +13,8 @@ function toolError(err: unknown) {
   };
 }
 
-function textResult(text: string) {
-  return { content: [{ type: "text" as const, text }] };
+function textResult(text: string, warning: string | null = null) {
+  return { content: [{ type: "text" as const, text: warning ? `${warning}\n\n${text}` : text }] };
 }
 
 function formatRows(rows: Record<string, unknown>[]): string {
@@ -38,7 +38,7 @@ server.tool(
   },
   async ({ worker, limit, errorsOnly }) => {
     try {
-      const db = getDb();
+      const { db, warning } = getFreshDb();
       let sql = `SELECT worker_name, status, message, started_at, finished_at,
         ROUND((julianday(finished_at) - julianday(started_at)) * 86400, 1) as duration_s
         FROM worker_runs WHERE 1=1`;
@@ -55,7 +55,7 @@ server.tool(
       params.push(limit);
 
       const rows = db.prepare(sql).all(...params) as Record<string, unknown>[];
-      return textResult(formatRows(rows));
+      return textResult(formatRows(rows), warning);
     } catch (err) {
       return toolError(err);
     }
@@ -74,7 +74,7 @@ server.tool(
   },
   async ({ worker, productKey, limit }) => {
     try {
-      const db = getDb();
+      const { db, warning } = getFreshDb();
       let sql = `SELECT worker, product_key, product_label, retailer, price, prev_price,
         ROUND(price - COALESCE(prev_price, price), 2) as delta, currency, recorded_at
         FROM price_history WHERE 1=1`;
@@ -92,7 +92,7 @@ server.tool(
       params.push(limit);
 
       const rows = db.prepare(sql).all(...params) as Record<string, unknown>[];
-      return textResult(formatRows(rows));
+      return textResult(formatRows(rows), warning);
     } catch (err) {
       return toolError(err);
     }
@@ -111,7 +111,7 @@ server.tool(
   },
   async ({ minDropPct, days, limit }) => {
     try {
-      const db = getDb();
+      const { db, warning } = getFreshDb();
       const sql = `SELECT worker, product_key, product_label, retailer,
         price, prev_price,
         ROUND((prev_price - price) / prev_price * 100, 1) as drop_pct,
@@ -125,7 +125,10 @@ server.tool(
         LIMIT ?`;
 
       const rows = db.prepare(sql).all(minDropPct, days, limit) as Record<string, unknown>[];
-      return textResult(rows.length === 0 ? `No drops ≥${minDropPct}% in the last ${days} days.` : formatRows(rows));
+      return textResult(
+        rows.length === 0 ? `No drops ≥${minDropPct}% in the last ${days} days.` : formatRows(rows),
+        warning
+      );
     } catch (err) {
       return toolError(err);
     }
@@ -145,7 +148,7 @@ server.tool(
   },
   async ({ source, sku, maxPrice, limit }) => {
     try {
-      const db = getDb();
+      const { db, warning } = getFreshDb();
       let sql = `SELECT source, title, price, currency, sku, sku_label,
         ram_gb, storage_gb, location, url, first_seen, last_seen
         FROM listings WHERE disappeared IS NULL`;
@@ -167,7 +170,7 @@ server.tool(
       params.push(limit);
 
       const rows = db.prepare(sql).all(...params) as Record<string, unknown>[];
-      return textResult(formatRows(rows));
+      return textResult(formatRows(rows), warning);
     } catch (err) {
       return toolError(err);
     }
@@ -185,7 +188,7 @@ server.tool(
   },
   async ({ status, limit }) => {
     try {
-      const db = getDb();
+      const { db, warning } = getFreshDb();
       let sql = `SELECT source, job_id, verdict_json, cached_at FROM job_verdict_cache WHERE 1=1`;
       const params: unknown[] = [];
 
@@ -198,7 +201,7 @@ server.tool(
       params.push(limit);
 
       const rows = db.prepare(sql).all(...params) as Record<string, unknown>[];
-      return textResult(formatRows(rows));
+      return textResult(formatRows(rows), warning);
     } catch (err) {
       return toolError(err);
     }
@@ -217,7 +220,7 @@ server.tool(
   },
   async ({ worker, channel, limit }) => {
     try {
-      const db = getDb();
+      const { db, warning } = getFreshDb();
       let sql = `SELECT worker_name, channel, success, title, error, sent_at
         FROM worker_notifications WHERE 1=1`;
       const params: unknown[] = [];
@@ -234,7 +237,7 @@ server.tool(
       params.push(limit);
 
       const rows = db.prepare(sql).all(...params) as Record<string, unknown>[];
-      return textResult(formatRows(rows));
+      return textResult(formatRows(rows), warning);
     } catch (err) {
       return toolError(err);
     }
@@ -258,13 +261,13 @@ server.tool(
         return toolError("Mutating SQL blocked. This server is read-only.");
       }
 
-      const db = getDb();
+      const { db, warning } = getFreshDb();
       const normalized = sql.trim().replace(/;$/, "");
       const hasLimit = /\bLIMIT\s+\d+/i.test(normalized);
       const finalSql = hasLimit ? normalized : `${normalized} LIMIT ${limit}`;
 
       const rows = db.prepare(finalSql).all() as Record<string, unknown>[];
-      return textResult(formatRows(rows));
+      return textResult(formatRows(rows), warning);
     } catch (err) {
       return toolError(err);
     }
