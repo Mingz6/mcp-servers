@@ -11,6 +11,11 @@ function resolveDbPath(): string {
   return dbPath;
 }
 
+/** Path to the local db file, independent of whether it currently exists (freshness.ts needs this to know where to write a refreshed copy). */
+export function getDbPath(): string {
+  return resolveDbPath();
+}
+
 export function getDb(): Database.Database {
   if (db) return db;
 
@@ -24,4 +29,12 @@ export function getDb(): Database.Database {
   // mode; reads work fine regardless of whatever journal mode the file is in.
   db = new Database(dbPath, { readonly: true });
   return db;
+}
+
+/** Closes the cached handle so the next getDb() re-opens from disk — used after a freshness refresh replaces the file on disk. */
+export function reopenDb(): void {
+  if (db) {
+    db.close();
+    db = null;
+  }
 }
