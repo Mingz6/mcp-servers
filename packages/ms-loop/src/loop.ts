@@ -15,6 +15,38 @@ function isSpeUrl(shareUrl: string): boolean {
   return shareUrl.includes("contentstorage/CSP_");
 }
 
+/**
+ * Loop share links wrap the real SharePoint URL in a base64 JSON payload at
+ * `loop.cloud.microsoft/p/{base64}`. The payload is either `{"u":"<url>"}` or the
+ * newer `{"w":…,"p":{"u":"<url>"},"i":…}`. Passing the wrapper straight to Graph's
+ * /shares/ endpoint yields a misleading 403 "sharing link no longer exists".
+ */
+function unwrapLoopShareUrl(shareUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(shareUrl);
+  } catch {
+    return shareUrl;
+  }
+  if (!parsed.hostname.endsWith("loop.cloud.microsoft")) return shareUrl;
+
+  const segment = parsed.pathname.split("/").filter(Boolean).pop();
+  if (!segment) return shareUrl;
+
+  try {
+    const normalized = decodeURIComponent(segment)
+      .replace(/-/g, "+")
+      .replace(/_/g, "/");
+    const padded =
+      normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+    const payload = JSON.parse(Buffer.from(padded, "base64").toString("utf-8"));
+    const inner = payload?.p?.u ?? payload?.u;
+    return typeof inner === "string" && inner.length > 0 ? inner : shareUrl;
+  } catch {
+    return shareUrl;
+  }
+}
+
 function parseSpeNavParam(navParam: string): {
   driveId: string | null;
   itemId: string | null;
@@ -45,6 +77,25 @@ function htmlToText(html: string): string {
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/**
+ * Loop workspace pages live in SharePoint Embedded containers this app registration has
+ * no write access to. Graph's bare "accessDenied" leaves the caller with nothing to act
+ * on, so redirect them to the browser path the loop-manager skill uses.
+ */
+function rethrowWriteError(err: unknown, operation: string): never {
+  const msg = String(err);
+  if (msg.includes("403") || msg.toLowerCase().includes("accessdenied")) {
+    throw new Error(
+      `Loop ${operation} failed (403 accessDenied). This drive is a Loop workspace ` +
+        `(SharePoint Embedded container) and this MCP server has no write permission ` +
+        `there — API writes are not possible. Use the browser instead: open the ` +
+        `loop.cloud.microsoft page and edit the Canvas element (see the loop-manager ` +
+        `skill). Original error: ${msg}`
+    );
+  }
+  throw err;
 }
 
 // --- READ ---
@@ -165,8 +216,10 @@ export async function getLoopByShareUrl(
   let metadata: any;
   let knownSummary: string | undefined;
 
-  if (isSpeUrl(shareUrl)) {
-    const urlObj = new URL(shareUrl);
+  const resolvedUrl = unwrapLoopShareUrl(shareUrl);
+
+  if (isSpeUrl(resolvedUrl)) {
+    const urlObj = new URL(resolvedUrl);
     const navParam = urlObj.searchParams.get("nav");
     if (!navParam) {
       throw new Error(
@@ -195,7 +248,7 @@ export async function getLoopByShareUrl(
       }
     }
   } else {
-    const encoded = encodeShareUrl(shareUrl);
+    const encoded = encodeShareUrl(resolvedUrl);
     metadata = await graphGet(
       `/shares/${encoded}/driveItem`,
       { $select: "id,name,size,webUrl,lastModifiedDateTime,file,parentReference" }
@@ -426,7 +479,9 @@ export async function createLoopFile(
     ? `/drives/${driveId}/root:/${parentPath.replace(/^\/|\/$/g, "")}/${name}:/content`
     : `/drives/${driveId}/root:/${name}:/content`;
 
-  const result = await graphPut(uploadPath, htmlContent, "text/html");
+  const result = await graphPut(uploadPath, htmlContent, "text/html").catch((err) =>
+    rethrowWriteError(err, "create")
+  );
 
   return {
     id: result?.id ?? "",
@@ -447,7 +502,7 @@ export async function updateLoopFile(
     `/drives/${driveId}/items/${itemId}/content`,
     htmlContent,
     "text/html"
-  );
+  ).catch((err) => rethrowWriteError(err, "update"));
 
   return {
     id: result?.id ?? itemId,
@@ -463,7 +518,9 @@ export async function renameLoopFile(
   newName: string
 ): Promise<{ id: string; name: string; webUrl: string }> {
   const name = newName.endsWith(".loop") ? newName : `${newName}.loop`;
-  const result = await graphPatch(`/drives/${driveId}/items/${itemId}`, { name });
+  const result = await graphPatch(`/drives/${driveId}/items/${itemId}`, { name }).catch(
+    (err) => rethrowWriteError(err, "rename")
+  );
 
   return {
     id: result?.id ?? itemId,
@@ -478,5 +535,7 @@ export async function deleteLoopFile(
   driveId: string,
   itemId: string
 ): Promise<void> {
-  await graphDelete(`/drives/${driveId}/items/${itemId}`);
+  await graphDelete(`/drives/${driveId}/items/${itemId}`).catch((err) =>
+    rethrowWriteError(err, "delete")
+  );
 }
