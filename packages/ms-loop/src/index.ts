@@ -188,7 +188,7 @@ server.tool(
 
 server.tool(
   "loop_create",
-  "Create a new Loop file with HTML content in a specific workspace drive.",
+  "Create a new Loop file with HTML content in a specific workspace drive. NOTE: only works on personal OneDrive drives \u2014 shared Loop workspaces (SPE containers) return 403; use the browser for those. The created file also cannot be read back via loop_read_by_id.",
   {
     driveId: z.string().describe("The drive ID to create the file in"),
     fileName: z
@@ -223,7 +223,7 @@ server.tool(
 
 server.tool(
   "loop_update",
-  "Replace the content of an existing Loop file with new HTML content.",
+  "Replace the entire content of an existing Loop file (not a patch/append). NOTE: only works on personal OneDrive drives \u2014 shared Loop workspaces (SPE containers) return 403; use the browser for those.",
   {
     driveId: z.string().describe("The drive ID of the file"),
     itemId: z.string().describe("The item ID of the Loop file to update"),
@@ -248,7 +248,7 @@ server.tool(
 
 server.tool(
   "loop_rename",
-  "Rename an existing Loop file.",
+  "Rename an existing Loop file. NOTE: only works on personal OneDrive drives \u2014 shared Loop workspaces (SPE containers) return 403; use the browser for those.",
   {
     driveId: z.string().describe("The drive ID of the file"),
     itemId: z.string().describe("The item ID of the Loop file to rename"),
@@ -275,7 +275,7 @@ server.tool(
 
 server.tool(
   "loop_delete",
-  "Delete a Loop file permanently. This action cannot be undone.",
+  "Delete a Loop file permanently. This action cannot be undone. NOTE: only works on personal OneDrive drives \u2014 shared Loop workspaces (SPE containers) return 403; use the browser for those.",
   {
     driveId: z.string().describe("The drive ID of the file"),
     itemId: z.string().describe("The item ID of the Loop file to delete"),
