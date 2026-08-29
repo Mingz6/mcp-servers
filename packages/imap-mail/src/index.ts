@@ -5,13 +5,13 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { z } from "zod";
 import {
-  accountLabel,
-  downloadAttachment,
-  listAttachments,
-  listInbox,
-  markAsRead,
-  readMessage,
-  searchMail,
+    accountLabel,
+    downloadAttachment,
+    listAttachments,
+    listInbox,
+    markAsRead,
+    readMessage,
+    searchMail,
 } from "./imap-client.js";
 
 const server = new McpServer({

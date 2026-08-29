@@ -8,7 +8,6 @@ All MCP servers in one place — custom and third-party. VS Code's `mcp.json` po
 |--------|------|-------------|---------------|
 | [teams-chat](packages/teams-chat/) | Custom (Node) | Read/send Teams messages, extract PR links | Standup, PR review requests, colleague replies |
 | [outlook](packages/outlook/) | Custom (Node) | Read/send Outlook mail, search, mark read, attachments | Email triage during standup, PO reply detection |
-| [applemail](packages/applemail/) | Custom (Node) | Read/send via local Apple Mail (SQLite + .emlx, AppleScript) | Personal mail across iCloud/Gmail/work without cloud auth |
 | [imessage](packages/imessage/) | Custom (Python) | Read iMessage/SMS via Messages.app, send via AppleScript | Tenant/family chats |
 | [brain-mcp](packages/brain-mcp/) | Custom (Node) | Search/read/link/update `~/code/brain` Markdown wiki | Agent-readable knowledge layer for Copilot and Claude Code |
 | [discord-user](packages/discord-user/) | Custom (Node) | Read Discord servers/DMs via personal user token (read-only) | See community channels the bot can't access |
@@ -27,7 +26,6 @@ All MCP servers in one place — custom and third-party. VS Code's `mcp.json` po
 ```
 mcp-servers/
 ├── packages/
-│   ├── applemail/         # Custom — Apple Mail via SQLite + AppleScript
 │   ├── brain-mcp/         # Custom — local brain Markdown wiki API
 │   ├── discord-user/      # Custom — Discord via personal user token
 │   ├── flywheel/          # Custom — reference repo tracker
