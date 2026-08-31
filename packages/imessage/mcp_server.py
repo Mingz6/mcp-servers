@@ -13,6 +13,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -441,6 +442,69 @@ def messages_contacts(
             lines.append(f"{row['chat_identifier']} [{svc}] ({ts:%Y-%m-%d %H:%M}) {direction} {preview}")
 
         return f"Recent conversations ({len(lines)}):\n" + "\n".join(lines)
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def messages_recent(
+    hours: int = 4,
+    limit: int = 50,
+    incoming_only: bool = True,
+) -> str:
+    """Recent messages across all conversations, newest first.
+
+    messages_read needs a phone number and messages_search needs a keyword, so
+    neither answers "what came in recently" — this does.
+
+    Args:
+        hours: How far back to look (default 4, max 168)
+        limit: Max messages (default 50, max 200)
+        incoming_only: Skip messages you sent (default True)
+    """
+    hours = min(max(1, hours), 168)
+    limit = min(max(1, limit), 200)
+
+    cutoff = int((time.time() - hours * 3600 - 978307200) * 1_000_000_000)
+
+    conn = _get_db()
+    try:
+        where = ["m.date >= ?"]
+        params: list = [cutoff]
+        if incoming_only:
+            where.append("m.is_from_me = 0")
+
+        rows = conn.execute(
+            f"""
+            SELECT m.date, m.is_from_me, m.text,
+                   m.attributedBody as attributed_body,
+                   c.chat_identifier, c.service_name
+            FROM message m
+            JOIN chat_message_join cmj ON m.rowid = cmj.message_id
+            JOIN chat c ON cmj.chat_id = c.rowid
+            WHERE {" AND ".join(where)}
+            ORDER BY m.date DESC
+            LIMIT ?
+            """,
+            params + [limit],
+        ).fetchall()
+
+        if not rows:
+            scope = "incoming " if incoming_only else ""
+            return f"No {scope}messages in the last {hours}h."
+
+        lines = []
+        for row in rows:
+            ts = _apple_ts_to_datetime(row["date"])
+            svc_name = (row["service_name"] or "").lower()
+            svc = "SMS" if "sms" in svc_name or "rcs" in svc_name else "iMsg"
+            direction = "→" if row["is_from_me"] else "←"
+            text = _extract_text(row)
+            lines.append(
+                f"[{ts:%Y-%m-%d %H:%M}] {row['chat_identifier']} [{svc}] {direction} {text}"
+            )
+
+        return f"Recent messages, last {hours}h ({len(lines)}):\n" + "\n".join(lines)
     finally:
         conn.close()
 
