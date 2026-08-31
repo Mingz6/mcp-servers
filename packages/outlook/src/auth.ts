@@ -203,3 +203,18 @@ export async function clearTokenCache(): Promise<void> {
   msalInstance = null;
   pendingAuth = null;
 }
+
+// getAccessToken() deliberately fails fast so MCP tool calls don't block for
+// ~15 min waiting on a human. A CLI login is the opposite: it should print the
+// code and then actually wait for the sign-in to land.
+export async function getAccessTokenInteractive(): Promise<string> {
+  try {
+    return await getAccessToken();
+  } catch (err) {
+    if (err instanceof AuthPendingError) {
+      console.log(err.message);
+      return await err.tokenPromise;
+    }
+    throw err;
+  }
+}

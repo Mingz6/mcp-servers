@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
+    "login": "node dist/auth-test.js",
     "auth-test": "node dist/auth-test.js"
   },
   "dependencies": {
