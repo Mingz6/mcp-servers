@@ -1,1 +1,1 @@
-mcp>=1.27.0
+mcp>=1.27.0,<2  # v2 renamed FastMCP -> MCPServer; this code is v1

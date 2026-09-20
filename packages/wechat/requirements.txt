@@ -1,4 +1,5 @@
 # WeChat MCP server + message export scripts
 # Most packages are transitive deps of mcp[cli]
-mcp>=1.27.0
+mcp>=1.27.0,<2  # v2 renamed FastMCP -> MCPServer; this code is v1
 pilk>=0.2.0
+zstandard>=0.22.0  # mcp_server.py decompresses WeChat's zstd-packed message blobs
