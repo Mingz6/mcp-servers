@@ -8,9 +8,16 @@ import { mkdir, readFile, rename, unlink, writeFile } from "fs/promises";
 import { homedir } from "os";
 import { join } from "path";
 
-// Override via OUTLOOK_MCP_CACHE_DIR so a second instance (different account/app
-// registration) doesn't clobber this one's cached token.
-const CACHE_DIR = process.env.OUTLOOK_MCP_CACHE_DIR || join(homedir(), ".mcp-outlook");
+// Keyed by identity, so every MCP server signing in as the same app+tenant shares one
+// refresh token and a single device-code sign-in covers all of them. An explicit
+// OUTLOOK_MCP_CACHE_DIR still wins, for accounts that must stay isolated.
+const CACHE_DIR =
+  process.env.OUTLOOK_MCP_CACHE_DIR ||
+  join(
+    homedir(),
+    ".mcp-msgraph",
+    `${process.env.OUTLOOK_MCP_TENANT_ID || "common"}__${process.env.OUTLOOK_MCP_CLIENT_ID || "unknown"}`
+  );
 const CACHE_PATH = join(CACHE_DIR, "token-cache.json");
 const CACHE_TMP_PATH = `${CACHE_PATH}.tmp`;
 
@@ -185,8 +192,27 @@ export async function getAccessToken(): Promise<string> {
       });
       pendingAuth = null; // signed in — clear any stale pending sign-in state
       return result.accessToken;
-    } catch {
-      // Silent failed — fall through to device code
+    } catch (err) {
+      const e = err as { errorCode?: string; name?: string; message?: string };
+      console.error(
+        `[outlook] Silent token refresh failed (${e.errorCode ?? e.name ?? "unknown"}): ${e.message ?? ""}`
+      );
+
+      // Only a genuine interaction-required error should cost a device-code sign-in.
+      const needsInteraction =
+        e.name === "InteractionRequiredAuthError" ||
+        ["interaction_required", "consent_required", "login_required"].includes(e.errorCode ?? "") ||
+        /AADSTS(50076|50078|50079|50173|53003|70043|700082)/.test(e.message ?? "");
+
+      if (!needsInteraction) {
+        try {
+          const retry = await pca.acquireTokenSilent({ account: accounts[0], scopes: SCOPES, forceRefresh: true });
+          pendingAuth = null;
+          return retry.accessToken;
+        } catch (retryErr) {
+          console.error(`[outlook] Forced refresh also failed: ${(retryErr as Error).message}`);
+        }
+      }
     }
   }
 
