@@ -608,6 +608,30 @@ function extractHostedContentIds(html: string): string[] {
   return [...new Set(ids)];
 }
 
+// Graph reports Content-Type from the chat message's original attachment tag,
+// which frequently disagrees with the actual bytes at hostedContents/$value
+// (observed: header says image/png, body is WEBP). Consumers like Anthropic's
+// API validate declared media type against real bytes and reject the whole
+// request on mismatch, so sniff the magic bytes instead of trusting the header.
+function sniffImageMimeType(data: Buffer): string | null {
+  if (data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return "image/png";
+  }
+  if (data.length >= 12 && data.subarray(0, 4).toString("ascii") === "RIFF" && data.subarray(8, 12).toString("ascii") === "WEBP") {
+    return "image/webp";
+  }
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (data.length >= 6 && (data.subarray(0, 6).toString("ascii") === "GIF87a" || data.subarray(0, 6).toString("ascii") === "GIF89a")) {
+    return "image/gif";
+  }
+  if (data.length >= 2 && data[0] === 0x42 && data[1] === 0x4d) {
+    return "image/bmp";
+  }
+  return null;
+}
+
 export async function getMessageHostedContent(
   chatId: string,
   messageId: string,
@@ -615,7 +639,8 @@ export async function getMessageHostedContent(
 ): Promise<{ data: string; mimeType: string }> {
   const path = `/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/hostedContents/${encodeURIComponent(hostedContentId)}/$value`;
   const { data, contentType } = await graphFetchBinary(path);
-  return { data: data.toString("base64"), mimeType: contentType };
+  const mimeType = sniffImageMimeType(data) || contentType;
+  return { data: data.toString("base64"), mimeType };
 }
 
 // --- Helpers ---
