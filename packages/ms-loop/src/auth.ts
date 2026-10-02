@@ -57,6 +57,108 @@ function tryOpenBrowser(url: string): void {
   }
 }
 
+const LOCK_PATH = join(CACHE_DIR, "auth-lock.json");
+const LOCK_TTL_MS = 20 * 60 * 1000; // generous cap; narrowed to the real code's expiresIn once known
+
+interface AuthLock {
+  pid: number;
+  label: string;
+  verificationUri?: string;
+  userCode?: string;
+  expiresAt: number;
+}
+
+async function readLock(): Promise<AuthLock | null> {
+  try {
+    return JSON.parse(await readFile(LOCK_PATH, "utf-8")) as AuthLock;
+  } catch {
+    return null;
+  }
+}
+
+// Atomic create (fails if the file already exists) — the real mutex. teams-chat, outlook,
+// and ms-loop all share this CACHE_DIR for the same tenant+client identity, so whichever
+// process creates this file first is the only one that opens a browser tab / prints a code.
+async function claimLock(label: string): Promise<boolean> {
+  try {
+    await mkdir(CACHE_DIR, { recursive: true, mode: 0o700 });
+    const lock: AuthLock = { pid: process.pid, label, expiresAt: Date.now() + LOCK_TTL_MS };
+    await writeFile(LOCK_PATH, JSON.stringify(lock), { flag: "wx", mode: 0o600 });
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw err;
+  }
+}
+
+async function updateLock(patch: Partial<AuthLock>): Promise<void> {
+  const lock = await readLock();
+  if (!lock || lock.pid !== process.pid) return; // another process already reclaimed it
+  try {
+    await writeFile(LOCK_PATH, JSON.stringify({ ...lock, ...patch }), { mode: 0o600 });
+  } catch {
+    // best-effort — a waiter just keeps polling acquireTokenSilent instead
+  }
+}
+
+async function releaseLock(): Promise<void> {
+  const lock = await readLock();
+  if (lock?.pid !== process.pid) return;
+  try { await unlink(LOCK_PATH); } catch { /* ignore */ }
+}
+
+// Surfaces the code another teams-chat/outlook/ms-loop process already has pending, instead
+// of starting (and popping up) a second device-code flow for the same shared account.
+function waitOnOtherProcess(pca: PublicClientApplication, lock: AuthLock, label: string): AuthPendingError {
+  const tokenPromise = (async (): Promise<string> => {
+    while (Date.now() < lock.expiresAt) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      const accounts = await pca.getTokenCache().getAllAccounts();
+      if (accounts.length === 0) continue;
+      try {
+        const result = await pca.acquireTokenSilent({ account: accounts[0], scopes: SCOPES });
+        return result.accessToken;
+      } catch {
+        // that process's sign-in hasn't landed yet — keep polling
+      }
+    }
+    throw new Error("Shared sign-in expired before this process saw a fresh token.");
+  })();
+
+  tokenPromise
+    .finally(() => {
+      if (pendingAuth?.tokenPromise === tokenPromise) pendingAuth = null;
+    })
+    .catch(() => { /* already surfaced via AuthPendingError.tokenPromise */ });
+
+  return new AuthPendingError(
+    `AUTH_REQUIRED: Sign in to ${label} to continue.\n` +
+      `${lock.label} already started this sign-in (same shared account) — use ITS popup/notification, ` +
+      `don't expect a second one:\n` +
+      `1. Open ${lock.verificationUri ?? "(code still being issued — retry this tool in a few seconds)"}\n` +
+      `2. Enter code: ${lock.userCode ?? "(pending)"}\n` +
+      `Sign-in keeps working in the background — just retry this tool after you finish.`,
+    lock.verificationUri ?? "",
+    lock.userCode ?? "",
+    lock.expiresAt,
+    tokenPromise
+  );
+}
+
+function notifyUser(label: string, userCode: string, verificationUri: string): void {
+  if (process.platform !== "darwin") return;
+  const body = `Enter code ${userCode} at ${verificationUri}`.replace(/"/g, '\\"');
+  const title = `${label} sign-in needed`.replace(/"/g, '\\"');
+  try {
+    spawn("osascript", ["-e", `display notification "${body}" with title "${title}" sound name "Glass"`], {
+      stdio: "ignore",
+      detached: true,
+    }).unref();
+  } catch {
+    // best-effort — the printed code/popup still work if this fails
+  }
+}
+
 async function loadCache(): Promise<string | undefined> {
   try {
     const data = await readFile(CACHE_PATH, "utf-8");
@@ -125,6 +227,27 @@ async function startOrReusePendingAuth(pca: PublicClientApplication): Promise<Au
     return pendingAuth;
   }
 
+  const LABEL = "MS Loop MCP";
+
+  // Cross-process check: teams-chat, outlook, and ms-loop share one on-disk identity, so if
+  // another of them already has a device code pending, reuse ITS code instead of opening a
+  // second browser tab for the exact same sign-in.
+  const existingLock = await readLock();
+  if (existingLock && existingLock.expiresAt > Date.now() && existingLock.pid !== process.pid) {
+    pendingAuth = waitOnOtherProcess(pca, existingLock, LABEL);
+    return pendingAuth;
+  }
+  if (existingLock) await releaseLock(); // ours or expired — clear before reclaiming
+
+  if (!(await claimLock(LABEL))) {
+    // Lost the race to another process that claimed it between our read and write.
+    const freshLock = await readLock();
+    if (freshLock && freshLock.pid !== process.pid) {
+      pendingAuth = waitOnOtherProcess(pca, freshLock, LABEL);
+      return pendingAuth;
+    }
+  }
+
   let settleCodeReady: (v: { verificationUri: string; userCode: string; expiresIn: number }) => void;
   const codeReady = new Promise<{ verificationUri: string; userCode: string; expiresIn: number }>((resolve) => {
     settleCodeReady = resolve;
@@ -137,6 +260,12 @@ async function startOrReusePendingAuth(pca: PublicClientApplication): Promise<Au
       console.error(response.message);
       console.error();
       tryOpenBrowser(response.verificationUri);
+      notifyUser(LABEL, response.userCode, response.verificationUri);
+      void updateLock({
+        verificationUri: response.verificationUri,
+        userCode: response.userCode,
+        expiresAt: Date.now() + response.expiresIn * 1000,
+      });
       settleCodeReady({
         verificationUri: response.verificationUri,
         userCode: response.userCode,
@@ -157,6 +286,7 @@ async function startOrReusePendingAuth(pca: PublicClientApplication): Promise<Au
     })
     .finally(() => {
       if (pendingAuth?.tokenPromise === tokenPromise) pendingAuth = null;
+      void releaseLock();
     });
 
   // Race the code becoming available against the whole flow failing before that happens
