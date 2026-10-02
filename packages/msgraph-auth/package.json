@@ -1,0 +1,21 @@
+{
+  "name": "mcp-msgraph-auth",
+  "version": "1.0.0",
+  "description": "Shared MSAL device-code auth (cross-process lock + macOS notify + token cache) for the Microsoft Graph MCP servers (teams-chat, outlook, ms-loop)",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^2.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
