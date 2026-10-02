@@ -10,6 +10,7 @@
     "build": "npm run build -w packages/msgraph-auth && npm run build --workspaces --if-present",
     "build:brain-mcp": "npm run build -w packages/brain-mcp",
     "build:msgraph-auth": "npm run build -w packages/msgraph-auth",
+    "build:msgraph": "npm run build -w packages/msgraph-auth && npm run build -w packages/msgraph",
     "build:teams-chat": "npm run build -w packages/msgraph-auth && npm run build -w packages/teams-chat",
     "build:outlook": "npm run build -w packages/msgraph-auth && npm run build -w packages/outlook",
     "build:discord-user": "npm run build -w packages/discord-user",
