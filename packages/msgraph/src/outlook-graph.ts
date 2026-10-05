@@ -88,6 +88,18 @@ async function graphPostJson<T>(
   return (await response.json()) as T;
 }
 
+async function graphPostEmpty(path: string): Promise<void> {
+  const token = await getAccessToken();
+  const response = await fetch(`${GRAPH_BASE}${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Length": "0" },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Graph API POST ${response.status}: ${text}`);
+  }
+}
+
 // --- Types ---
 
 export interface MailMessage {
@@ -310,6 +322,98 @@ export async function createDraft(
     id: result.id,
     webLink: result.webLink,
   };
+}
+
+export interface MessageRef {
+  id: string;
+  internetMessageId: string;
+  subject: string;
+  from: string;
+}
+
+export async function getMessageRef(messageId: string): Promise<MessageRef> {
+  const data = await graphFetch(`/me/messages/${encodeURIComponent(messageId)}`, {
+    $select: "id,internetMessageId,subject,from",
+  });
+  return {
+    id: data.id,
+    internetMessageId: data.internetMessageId,
+    subject: data.subject || "(no subject)",
+    from: data.from?.emailAddress?.address || "Unknown",
+  };
+}
+
+/** Graph ids change when a message moves folders; the Internet message id doesn't. */
+export async function findMessageId(internetMessageId: string): Promise<string> {
+  const data = await graphFetch("/me/messages", {
+    $filter: `internetMessageId eq '${internetMessageId.replace(/'/g, "''")}'`,
+    $select: "id,isDraft",
+    $top: "5",
+  });
+  const hit = (data.value || []).find((m: any) => !m.isDraft);
+  if (!hit) throw new Error(`No message with Internet id ${internetMessageId}`);
+  return hit.id;
+}
+
+/**
+ * Reply inside the original thread: Graph builds the reply (recipients, "RE:" subject, quoted
+ * history, conversation headers), and the new text goes on top. A fresh /sendMail with the
+ * same subject starts a separate thread instead.
+ */
+export async function replyToMessage(
+  messageId: string,
+  body: string,
+  replyAll = true,
+  draft = true
+): Promise<{ id: string; webLink: string }> {
+  const action = replyAll ? "createReplyAll" : "createReply";
+  const reply = await graphPostJson<{ id: string; webLink: string; body: { contentType: string; content: string } }>(
+    `/me/messages/${encodeURIComponent(messageId)}/${action}`,
+    {}
+  );
+  const quoted = reply.body?.content ?? "";
+  const content =
+    reply.body?.contentType?.toLowerCase() === "html"
+      ? insertAfterBodyTag(quoted, textToHtml(body))
+      : `${body}\r\n\r\n${quoted}`;
+  await graphPatch(`/me/messages/${encodeURIComponent(reply.id)}`, {
+    body: { contentType: reply.body?.contentType ?? "html", content },
+  });
+  if (!draft) {
+    await graphPostEmpty(`/me/messages/${encodeURIComponent(reply.id)}/send`);
+  }
+  return { id: reply.id, webLink: reply.webLink };
+}
+
+function insertAfterBodyTag(html: string, fragment: string): string {
+  const m = /<body[^>]*>/i.exec(html);
+  if (!m) return fragment + html;
+  const at = m.index + m[0].length;
+  return html.slice(0, at) + fragment + html.slice(at);
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** Plain text (blank-line paragraphs, 4-space code blocks, [text](url) links) to Outlook HTML. */
+export function textToHtml(text: string): string {
+  const linkify = (escaped: string) =>
+    escaped
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>')
+      .replace(/(^|[\s(])(https?:\/\/[^\s<)]*[^\s<).,;:])/g, '$1<a href="$2">$2</a>');
+  const blocks = text.replace(/\r\n/g, "\n").trim().split(/\n\s*\n/);
+  const html = blocks
+    .map((block) => {
+      const lines = block.split("\n");
+      if (lines.every((l) => /^ {4}/.test(l) || l.trim() === "")) {
+        const code = lines.map((l) => escapeHtml(l.slice(4))).join("\n");
+        return `<pre style="font-family: Consolas, Menlo, monospace; font-size: 10pt">${code}</pre>`;
+      }
+      return `<p>${lines.map((l) => linkify(escapeHtml(l))).join("<br>")}</p>`;
+    })
+    .join("\n");
+  return `<div style="font-family: Aptos, Calibri, Helvetica, sans-serif; font-size: 12pt; color: rgb(0, 0, 0)">${html}</div>`;
 }
 
 export interface AttachmentInfo {
