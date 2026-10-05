@@ -26,6 +26,7 @@ import {
   listUnread,
   markAsRead,
   readMessage,
+  replyToMessage,
   searchMail,
   sendMail,
 } from "./outlook-graph.js";
@@ -794,7 +795,7 @@ server.tool(
 
 server.tool(
   "outlook_send",
-  "Send an email from the work Outlook account, OR create a draft for user review (preferred default).",
+  "Start a NEW email thread from the work Outlook account, OR create a draft for user review (preferred default). To answer an email someone sent, use outlook_reply instead: this tool always starts a separate thread.",
   {
     to: z
       .array(z.string())
@@ -837,6 +838,48 @@ server.tool(
           {
             type: "text" as const,
             text: `Email SENT to ${to.join(", ")}${cc?.length ? ` (CC: ${cc.join(", ")})` : ""}.`,
+          },
+        ],
+      };
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "outlook_reply",
+  "Reply inside an existing email thread from the work Outlook account (reply-all by default), keeping the subject, recipients and quoted history. Use this, never outlook_send, to answer an email. Creates a draft for review by default.",
+  {
+    messageId: z
+      .string()
+      .describe("ID of the newest message in the thread (from outlook_search / outlook_read)"),
+    body: z
+      .string()
+      .describe("Reply text. Plain text: blank lines split paragraphs, 4-space indented lines become a code block, [text](url) becomes a link"),
+    replyAll: z
+      .boolean()
+      .optional()
+      .default(true)
+      .describe("DEFAULT TRUE: everyone on the thread stays on it. False replies to the sender only."),
+    draft: z
+      .boolean()
+      .optional()
+      .default(true)
+      .describe(
+        "DEFAULT TRUE. Saves the reply in Drafts (returns webLink). False sends it now; only after the user approved the exact text."
+      ),
+  },
+  async ({ messageId, body, replyAll, draft }) => {
+    try {
+      const { webLink } = await replyToMessage(messageId, body, replyAll, draft);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: draft
+              ? `Reply draft saved in the thread${replyAll ? " (reply-all)" : ""}. Open for review: ${webLink}`
+              : `Reply SENT in the thread${replyAll ? " (reply-all)" : ""}.`,
           },
         ],
       };

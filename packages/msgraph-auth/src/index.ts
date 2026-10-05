@@ -368,6 +368,12 @@ export function createMsGraphAuth(config: MsGraphAuthConfig): MsGraphAuth {
       }
     }
 
+    // Unattended callers (a launchd job at 07:00) can't finish a device-code sign-in; a browser
+    // tab every 30 minutes would be worse than failing.
+    if (process.env[`${envPrefix}_SILENT_ONLY`] === "1") {
+      throw new Error(`SIGN_IN_REQUIRED: no cached ${serviceName} token. Use any ${label} tool in VS Code once to sign in.`);
+    }
+
     // Fail fast with the sign-in code instead of blocking the caller for up to ~15 min.
     throw await startOrReusePendingAuth(pca);
   }
