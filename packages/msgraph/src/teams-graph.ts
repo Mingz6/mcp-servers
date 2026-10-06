@@ -293,6 +293,49 @@ export async function reactToMessage(
   );
 }
 
+export interface ChatMember {
+  id: string;
+  displayName: string;
+  email?: string;
+}
+
+interface Mention {
+  id: number;
+  mentionText: string;
+  mentioned: { user: { id: string; displayName: string; userIdentityType: "aadUser" } };
+}
+
+const escapeHtml = (s: string): string =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** Turns each @[Full Name] (or @[first name], @[email]) into a Teams mention of that chat member. */
+export function applyMentions(content: string, members: ChatMember[]): { content: string; mentions: Mention[] } {
+  const mentions: Mention[] = [];
+  const out = content.replace(/@\[([^\]]+)\]/g, (_, raw: string) => {
+    const want = raw.trim().toLowerCase();
+    let hits = members.filter((m) => m.displayName?.toLowerCase() === want || m.email?.toLowerCase() === want);
+    if (!hits.length) hits = members.filter((m) => m.displayName?.toLowerCase().split(/\s+/)[0] === want);
+    if (hits.length !== 1) {
+      const names = members.map((m) => m.displayName).join(", ");
+      throw new Error(`@[${raw}] matches ${hits.length} members of this chat (members: ${names})`);
+    }
+    const m = hits[0];
+    const id = mentions.length;
+    mentions.push({ id, mentionText: m.displayName, mentioned: { user: { id: m.id, displayName: m.displayName, userIdentityType: "aadUser" } } });
+    return `<at id="${id}">${escapeHtml(m.displayName)}</at>`;
+  });
+  return { content: out, mentions };
+}
+
+async function chatMembers(chatId: string): Promise<ChatMember[]> {
+  const data = await graphFetch(`/chats/${encodeURIComponent(chatId)}/members`);
+  return (data.value ?? []).map((m: { userId: string; displayName: string; email?: string }) => ({
+    id: m.userId,
+    displayName: m.displayName,
+    email: m.email,
+  }));
+}
+
 export async function sendMessage(
   chatId: string,
   content: string,
@@ -303,16 +346,22 @@ export async function sendMessage(
   if (format === "html") {
     body = { contentType: "html", content };
   } else if (format === "text") {
-    body = { contentType: "text", content };
+    body = /@\[[^\]]+\]/.test(content)
+      ? { contentType: "html", content: escapeHtml(content).replace(/\n/g, "<br>") }
+      : { contentType: "text", content };
   } else {
     // markdown (default): convert to HTML for rich display
     body = { contentType: "html", content: markdownToHtml(content) };
   }
 
-  const response = await graphPost(
-    `/chats/${encodeURIComponent(chatId)}/messages`,
-    { body }
-  );
+  const payload: Record<string, unknown> = { body };
+  if (body.contentType === "html" && /@\[[^\]]+\]/.test(body.content)) {
+    const applied = applyMentions(body.content, await chatMembers(chatId));
+    body.content = applied.content;
+    payload.mentions = applied.mentions;
+  }
+
+  const response = await graphPost(`/chats/${encodeURIComponent(chatId)}/messages`, payload);
   const data = await response.json();
   return data.id;
 }
