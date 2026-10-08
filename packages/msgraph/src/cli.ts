@@ -2,7 +2,7 @@
 // server, but silent token only: nobody is at the keyboard at 07:00. The body comes on stdin.
 // Prints one JSON line. Exit 0 sent, 3 sign-in needed, 1 anything else.
 //
-//   cli.js teams --chat ID [--format markdown|text|html]
+//   cli.js teams --chat ID [--format markdown|html]
 //   cli.js mail --to A [--to B] [--cc C] --subject S
 //   cli.js reply (--internet-message-id ID | --message-id ID) [--sender-only] [--draft]
 //   cli.js mail-info --message-id ID
@@ -54,8 +54,10 @@ async function main(): Promise<void> {
   switch (cmd) {
     case "teams": {
       const teams = await import("./teams-graph.js");
-      const format = (one("format") ?? "markdown") as "markdown" | "text" | "html";
-      if (!["markdown", "text", "html"].includes(format)) out({ ok: false, error: `bad --format ${format}` }, 1);
+      // "text" used to collapse paragraph breaks in the Teams client — banned here too, not just
+      // in the two callers (outbox.py, send-queue.py) that used to be able to request it.
+      const format = (one("format") ?? "markdown") as "markdown" | "html";
+      if (!(["markdown", "html"] as string[]).includes(format)) out({ ok: false, error: `bad --format ${format}` }, 1);
       const chat = need("chat");
       const body = await readStdin();
       if (!body.trim()) out({ ok: false, error: "empty body" }, 1);
