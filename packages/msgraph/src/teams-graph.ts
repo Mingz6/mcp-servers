@@ -346,9 +346,11 @@ export async function sendMessage(
   if (format === "html") {
     body = { contentType: "html", content };
   } else if (format === "text") {
-    body = /@\[[^\]]+\]/.test(content)
-      ? { contentType: "html", content: escapeHtml(content).replace(/\n/g, "<br>") }
-      : { contentType: "text", content };
+    // Graph's raw contentType:"text" does NOT preserve newlines when the Teams client
+    // renders it — a multi-paragraph message collapses into one solid block (hit this bug
+    // 3 times before fixing it here). Always escape + convert \n to <br> instead, so this
+    // format can never again produce that bug, no matter what format the caller picks.
+    body = { contentType: "html", content: escapeHtml(content).replace(/\n/g, "<br>") };
   } else {
     // markdown (default): convert to HTML for rich display
     body = { contentType: "html", content: markdownToHtml(content) };

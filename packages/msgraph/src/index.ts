@@ -333,7 +333,7 @@ server.tool(
     format: z
       .enum(["markdown", "text", "html"])
       .default("markdown")
-      .describe("Message format: 'markdown' (default, converts to rich HTML), 'text' (plain text, preserves newlines), 'html' (raw HTML pass-through)"),
+      .describe("Message format: 'markdown' (default, converts to rich HTML — bold/links/lists/paragraphs all survive), 'text' (escaped plain text, newlines always rendered as line breaks), 'html' (raw HTML pass-through)"),
   },
   async ({ chatId, content, format }) => {
     try {
