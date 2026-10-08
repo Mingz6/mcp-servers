@@ -331,9 +331,9 @@ server.tool(
       .string()
       .describe("The message content"),
     format: z
-      .enum(["markdown", "text", "html"])
+      .enum(["markdown", "html"])
       .default("markdown")
-      .describe("Message format: 'markdown' (default, converts to rich HTML — bold/links/lists/paragraphs all survive), 'text' (escaped plain text, newlines always rendered as line breaks), 'html' (raw HTML pass-through)"),
+      .describe("Message format: 'markdown' (default, converts to rich HTML — bold/links/lists/paragraphs all survive), 'html' (raw HTML pass-through). 'text' is not offered: it used to collapse paragraph breaks and is now banned at every layer, not just unneeded."),
   },
   async ({ chatId, content, format }) => {
     try {
