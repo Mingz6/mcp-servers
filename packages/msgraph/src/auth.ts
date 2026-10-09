@@ -19,6 +19,8 @@ const auth: MsGraphAuth = createMsGraphAuth({
     "Calendars.Read",
     "OnlineMeetings.Read",
     "OnlineMeetingTranscript.Read.All",
+    "OnlineMeetingAiInsight.Read.All",
+    "CallTranscripts.Read.All",
     "Mail.ReadWrite",
     "Mail.Send",
     "Files.ReadWrite.All",

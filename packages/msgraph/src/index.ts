@@ -9,6 +9,8 @@ import {
   findChatByParticipant,
   getCalendarEvents,
   getMessageHostedContent,
+  getAdhocCallTranscript,
+  getMeetingAiInsights,
   getMeetingTranscript,
   getMyProfile,
   listChats,
@@ -473,15 +475,36 @@ server.tool(
 
 server.tool(
   "teams_get_meeting_transcript",
-  "Retrieve and clean the transcript for a specific Teams meeting. Returns speaker-attributed text ready for summarisation. Use teams_list_recent_meetings first to find the exact meeting name.",
+  "Retrieve and clean the transcript for a Teams meeting (by name) or an ad hoc call (by callId from teams_read_chat). Returns speaker-attributed text ready for summarisation. Use teams_list_recent_meetings first to find the exact meeting name.",
+  {
+    meetingName: z.string().optional().describe("Meeting subject to search for (partial match, case-insensitive)"),
+    meetingDate: z.string().optional().describe("Optional date filter (YYYY-MM-DD) to narrow results"),
+    callId: z.string().optional().describe("Ad hoc call ID (1:1 or group call started from a chat), shown on call events in teams_read_chat"),
+  },
+  async ({ meetingName, meetingDate, callId }) => {
+    try {
+      if (!callId && !meetingName) throw new Error("Pass meetingName (scheduled meeting) or callId (ad hoc call).");
+      const transcript = callId
+        ? await getAdhocCallTranscript(callId)
+        : await getMeetingTranscript(meetingName!, meetingDate);
+      return { content: [{ type: "text" as const, text: transcript }] };
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "teams_get_meeting_ai_insights",
+  "Copilot's AI notes and action items for a scheduled Teams meeting (the Recap tab). Works while tenant transcript access is off. Not available for ad hoc calls. For a recurring meeting, pass meetingDate to pick the instance; default is the newest.",
   {
     meetingName: z.string().describe("Meeting subject to search for (partial match, case-insensitive)"),
-    meetingDate: z.string().optional().describe("Optional date filter (YYYY-MM-DD) to narrow results"),
+    meetingDate: z.string().optional().describe("Optional date (YYYY-MM-DD) of the instance"),
   },
   async ({ meetingName, meetingDate }) => {
     try {
-      const transcript = await getMeetingTranscript(meetingName, meetingDate);
-      return { content: [{ type: "text" as const, text: transcript }] };
+      const text = await getMeetingAiInsights(meetingName, meetingDate);
+      return { content: [{ type: "text" as const, text }] };
     } catch (err) {
       return toolError(err);
     }

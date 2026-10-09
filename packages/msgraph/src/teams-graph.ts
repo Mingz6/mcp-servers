@@ -195,19 +195,35 @@ export async function readChatMessages(
 
   return allMessages
     .slice(0, top)
-    .filter((msg: any) => msg.body?.content)
+    .filter((msg: any) => msg.body?.content || msg.eventDetail)
     .map((msg: any) => ({
       id: msg.id,
       from:
         msg.from?.user?.displayName ||
         msg.from?.application?.displayName ||
         "System",
-      body: stripHtml(msg.body.content),
+      body: stripHtml(msg.body?.content || "") || describeChatEvent(msg.eventDetail),
       createdAt: msg.createdDateTime,
       messageType: msg.messageType,
-      hostedContentIds: extractHostedContentIds(msg.body.content),
+      hostedContentIds: extractHostedContentIds(msg.body?.content || ""),
     }))
     .reverse();
+}
+
+// Call, recording and transcript events have an empty body; the callId here is what
+// teams_get_meeting_transcript needs for an ad hoc call (those never reach the calendar).
+function describeChatEvent(detail: any): string {
+  if (!detail) return "";
+  const type = String(detail["@odata.type"] || "event")
+    .replace("#microsoft.graph.", "")
+    .replace(/EventMessageDetail$/, "");
+  const parts = [`[${type}]`];
+  if (detail.callRecordingDisplayName) parts.push(detail.callRecordingDisplayName);
+  if (detail.callRecordingStatus) parts.push(`status ${detail.callRecordingStatus}`);
+  if (detail.callEventType) parts.push(detail.callEventType);
+  if (detail.callDuration) parts.push(`duration ${detail.callDuration}`);
+  if (detail.callId) parts.push(`callId ${detail.callId}`);
+  return parts.join(" | ");
 }
 
 export async function findChatByParticipant(
@@ -574,18 +590,76 @@ function cleanVtt(rawVtt: string): string {
   return out.join("\n");
 }
 
-export async function getMeetingTranscript(meetingName: string, meetingDate?: string): Promise<string> {
-  // Step 1: Find matching calendar events
-  const daysBack = 30;
-  const end = new Date();
-  const start = new Date(end.getTime() - daysBack * 24 * 60 * 60 * 1000);
+const TRANSCRIPTS_DISABLED_HINT =
+  "Graph access to Teams transcripts is off for this tenant (Microsoft's default since the end of July 2026). " +
+  "A Teams or Global admin turns it on in Teams admin center > Meetings > Meeting settings > Transcript API access, " +
+  "or: Set-CsTeamsMeetingConfiguration -Identity Global -EnableGraphTranscriptAccess $true -EnableAttributedTranscripts $true. " +
+  "Scheduled meetings still have Copilot notes through teams_get_meeting_ai_insights.";
 
+function explainTranscriptError(err: unknown): Error {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("GraphAccessToTranscriptsDisabled")
+    ? new Error(`${TRANSCRIPTS_DISABLED_HINT}\n(${message.slice(0, 200)})`)
+    : err instanceof Error ? err : new Error(message);
+}
+
+function edmontonDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-CA", { timeZone: "America/Edmonton" });
+}
+
+// Recurring meetings share one onlineMeeting id, so its transcripts and insights cover every
+// instance. Keep the ones from the requested day; no day means the newest one.
+function pickInstance<T extends { createdDateTime?: string | null }>(items: T[], date?: string): T | undefined {
+  const dated = items
+    .filter((i) => i.createdDateTime)
+    .sort((a, b) => b.createdDateTime!.localeCompare(a.createdDateTime!));
+  return date ? dated.find((i) => edmontonDate(i.createdDateTime!) === date) : dated[0];
+}
+
+async function fetchTranscript(basePath: string, label: string, date?: string): Promise<{ id: string; text: string }> {
+  let transcripts: any[];
+  try {
+    transcripts = (await graphFetch(`${basePath}/transcripts`)).value || [];
+  } catch (err) {
+    throw explainTranscriptError(err);
+  }
+  const transcript = pickInstance(transcripts, date) ?? (date ? undefined : transcripts[transcripts.length - 1]);
+  if (!transcript) {
+    throw new Error(`No transcripts available for ${label}${date ? ` on ${date}` : ""}. Transcription must be started during the meeting by a participant.`);
+  }
+
+  const url = `${GRAPH_BASE}${basePath}/transcripts/${encodeURIComponent(transcript.id)}/content`;
+  const download = async (accept: string) => {
+    const token = await getAccessToken();
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: accept } });
+    return { response, body: await response.text() };
+  };
+  let { response, body } = await download("text/vtt");
+  // Tenant can allow transcripts but not speaker names; the unattributed format still works then.
+  if (response.status === 403 && body.includes("SpeakerAttributionNotAllowed")) {
+    ({ response, body } = await download("application/vnd.microsoft.graph.transcript+text"));
+  }
+  if (!response.ok) {
+    throw explainTranscriptError(new Error(`Graph API ${response.status} fetching transcript: ${body}`));
+  }
+  const text = (response.headers.get("content-type") || "").includes("vtt")
+    ? cleanVtt(body)
+    : body.split("\n").map((l) => l.trim()).filter((l) => l && !/^\d{2}:\d{2}:\d{2}/.test(l)).join("\n");
+  return { id: transcript.id, text };
+}
+
+async function findOnlineMeeting(meetingName: string, meetingDate?: string): Promise<{ event: any; onlineMeetingId: string }> {
+  const end = new Date();
+  const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  // Newest first, so a recurring meeting's latest instance wins and a busy month can't push it past $top.
   const data = await graphFetch(
     "/me/calendarView",
     {
       startDateTime: start.toISOString(),
       endDateTime: end.toISOString(),
-      $top: "50",
+      $top: "100",
+      $orderby: "start/dateTime desc",
       $select: "id,subject,start,isOnlineMeeting,onlineMeeting",
     },
     { Prefer: 'outlook.timezone="America/Edmonton"' }
@@ -605,46 +679,88 @@ export async function getMeetingTranscript(meetingName: string, meetingDate?: st
   }
 
   if (candidates.length === 0) {
-    throw new Error(`No Teams meetings found matching "${meetingName}"${meetingDate ? ` on ${meetingDate}` : " in the last 30 days"}. Try teams_list_recent_meetings to browse available meetings.`);
+    throw new Error(`No Teams meetings found matching "${meetingName}"${meetingDate ? ` on ${meetingDate}` : " in the last 30 days"}. Try teams_list_recent_meetings to browse available meetings. Ad hoc calls aren't on the calendar: pass the callId from teams_read_chat instead.`);
   }
 
-  // Step 2: Resolve first match to online meeting ID
   const event = candidates[0];
-  const meetingId = await resolveOnlineMeetingId(event.onlineMeeting.joinUrl);
-  if (!meetingId) {
+  const onlineMeetingId = await resolveOnlineMeetingId(event.onlineMeeting.joinUrl);
+  if (!onlineMeetingId) {
     throw new Error(`Could not resolve online meeting ID for "${event.subject}". The meeting may be cross-tenant or the join URL is no longer valid.`);
   }
+  return { event, onlineMeetingId };
+}
 
-  // Step 3: List transcripts
-  const transcriptsData = await graphFetch(`/me/onlineMeetings/${encodeURIComponent(meetingId)}/transcripts`);
-  const transcripts = transcriptsData.value || [];
-  if (transcripts.length === 0) {
-    throw new Error(`No transcripts available for "${event.subject}". Transcription must be started during the meeting by a participant.`);
-  }
-
-  // Step 4: Download the most recent transcript as VTT
-  const tid = transcripts[transcripts.length - 1].id;
-  const token = await (await import("./auth.js")).getAccessToken();
-  const vttUrl = `https://graph.microsoft.com/v1.0/me/onlineMeetings/${encodeURIComponent(meetingId)}/transcripts/${encodeURIComponent(tid)}/content?$format=text/vtt`;
-  const response = await fetch(vttUrl, {
-    headers: { Authorization: `Bearer ${token}`, Accept: "text/vtt" },
-  });
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Graph API ${response.status} fetching transcript: ${body}`);
-  }
-  const rawVtt = await response.text();
-
-  const cleaned = cleanVtt(rawVtt);
+export async function getMeetingTranscript(meetingName: string, meetingDate?: string): Promise<string> {
+  const { event, onlineMeetingId } = await findOnlineMeeting(meetingName, meetingDate);
+  const { id, text } = await fetchTranscript(
+    `/me/onlineMeetings/${encodeURIComponent(onlineMeetingId)}`,
+    `"${event.subject}"`,
+    meetingDate?.slice(0, 10)
+  );
   const header = [
     `Meeting: ${event.subject}`,
     `Date: ${event.start?.dateTime || "unknown"}`,
     `Meeting link: ${event.onlineMeeting?.joinUrl || "n/a"}`,
-    `Transcript ID: ${tid}`,
+    `Transcript ID: ${id}`,
     "---",
     "",
   ].join("\n");
-  return header + cleaned;
+  return header + text;
+}
+
+/** Ad hoc call (1:1 or group call started from a chat). The callId comes from teams_read_chat. */
+export async function getAdhocCallTranscript(callId: string): Promise<string> {
+  const { id, text } = await fetchTranscript(`/me/adhocCalls/${encodeURIComponent(callId)}`, `call ${callId}`);
+  return [`Call: ${callId}`, `Transcript ID: ${id}`, "---", "", text].join("\n");
+}
+
+let myUserId: string | undefined;
+
+/**
+ * Copilot's meeting notes and action items (the Teams "Recap" AI notes). Scheduled meetings only:
+ * Graph has no aiInsights for ad hoc calls. Needs OnlineMeetingAiInsight.Read.All and an
+ * M365 Copilot license, and works even while transcript access is off for the tenant.
+ */
+export async function getMeetingAiInsights(meetingName: string, meetingDate?: string): Promise<string> {
+  const { event, onlineMeetingId } = await findOnlineMeeting(meetingName, meetingDate);
+  myUserId ??= (await graphFetch("/me", { $select: "id" })).id as string;
+  const base = `/copilot/users/${myUserId}/onlineMeetings/${encodeURIComponent(onlineMeetingId)}/aiInsights`;
+
+  let insights: any[] = (await graphFetch(base)).value || [];
+  if (insights.length && !insights.some((i) => i.createdDateTime)) {
+    insights = await Promise.all(insights.slice(0, 40).map((i) => graphFetch(`${base}/${encodeURIComponent(i.id)}`)));
+  }
+  const day = meetingDate?.slice(0, 10) ?? String(event.start?.dateTime || "").slice(0, 10);
+  const picked = pickInstance(insights, day);
+  if (!picked) {
+    const days = [...new Set(insights.filter((i) => i.createdDateTime).map((i) => edmontonDate(i.createdDateTime)))];
+    throw new Error(`No Copilot notes for "${event.subject}" on ${day}.${days.length ? ` Days with notes: ${days.slice(0, 10).join(", ")}.` : " Copilot only writes notes when the meeting was transcribed."}`);
+  }
+  const insight = picked.meetingNotes ? picked : await graphFetch(`${base}/${encodeURIComponent(picked.id)}`);
+
+  const lines = [
+    `Meeting: ${event.subject}`,
+    `Date: ${new Date(insight.createdDateTime).toLocaleString("en-CA", { timeZone: "America/Edmonton" })}`,
+    "---",
+    "",
+    "## Notes",
+  ];
+  for (const note of insight.meetingNotes || []) {
+    lines.push(`- **${note.title}**: ${note.text}`);
+    for (const sub of note.subpoints || []) lines.push(`  - ${sub.title ? `${sub.title}: ` : ""}${sub.text}`);
+  }
+  lines.push("", "## Action items");
+  for (const item of insight.actionItems || []) {
+    lines.push(`- ${item.ownerDisplayName ? `[${item.ownerDisplayName}] ` : ""}**${item.title}**: ${item.text}`);
+  }
+  const mentions = insight.viewpoint?.mentionEvents || [];
+  if (mentions.length) {
+    lines.push("", "## Where you were mentioned");
+    for (const m of mentions) {
+      lines.push(`- ${m.speaker?.user?.displayName ?? "someone"}: ${m.transcriptUtterance ?? ""}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 // --- Image / Hosted Content ---
