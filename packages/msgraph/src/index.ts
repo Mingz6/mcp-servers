@@ -135,7 +135,8 @@ server.tool(
           : "";
         content.push({
           type: "text" as const,
-          text: `[${date}] ${m.from} (msgId: ${m.id}): ${m.body}${imageTag}`,
+          // VS Code joins text blocks with no separator, so each message ends its own line.
+          text: `[${date}] ${m.from} (msgId: ${m.id}): ${m.body}${imageTag}\n`,
         });
 
         if (includeImages) {
