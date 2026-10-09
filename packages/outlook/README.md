@@ -13,7 +13,8 @@ Outlook email access via Microsoft Graph API. Read inbox, search, read messages,
 | `outlook_attachments` | List attachments on a message |
 | `outlook_download_attachment` | Download an attachment to a local path |
 | `outlook_mark_read` | Mark a message as read or unread |
-| `outlook_send` | Send an email (defaults to draft — pass `draft: false` to actually send) |
+| `outlook_send` | Start a new email thread (defaults to draft — pass `draft: false` to actually send) |
+| `outlook_reply` | Reply inside an existing thread, keeping subject, recipients and quoted history (draft by default) |
 
 ## Setup
 
