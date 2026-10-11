@@ -19,7 +19,9 @@ STATUS: BROKEN as of 2026-06-16, retested 2026-07-07 — still broken
   permissions problem — the data isn't there. Only a breakpoint/hook at key
   derivation time (not memory scanning) could work now; see README.md.
   Track: cocohahaha/wechat-decrypt-macos + our packages/wechat/extract_key.py
-  Reminder to retry: ~2026-10-01
+  2026-10-11 lead (WeChat 4.1.15): Thearas' breakpoint script find_key.py was never
+  run. The setCipherKey signature still matches exactly once, in wechat.dylib (not the
+  WeChat launcher it searches). Needs one live run; details in README.md.
 
 Usage:
   # Start via MCP config (see README.md)
