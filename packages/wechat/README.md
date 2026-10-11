@@ -154,6 +154,30 @@ runtime already stripped by `refresh-wechat.sh` step 2):
   *at derivation time* (not memory scanning) surfaces. Reminder-to-retry
   bumped to ~2026-10-01 in `mcp_server.py`'s status docstring.
 
+**Lead found 2026-10-11 (WeChat 4.1.15, build 270133): the breakpoint path was never tested.**
+The July test ran only Thearas' `find_key_memscan.py`. The same repo's `find_key.py` is the
+derivation-time capture this section asks for: it finds `setCipherKey` by its
+`mov w0, #0x43` + `bl malloc` signature, breaks there, and reads the `x'<key><salt>'` string
+from `x1+8`. [BIBOYANG425/wechat-chat-history-mac](https://github.com/BIBOYANG425/wechat-chat-history-mac)
+(2 commits, April 2026) reports it working on 4.1.7, where memscan found 0/35 keys.
+
+Static check on 4.1.15 (lldb on the files, no attach, no sudo):
+
+- `MacOS/WeChat` is a 186 KB launcher with zero candidates. Upstream `find_key.py` only
+  searches the module named `WeChat`, so it fails here as written.
+- `Resources/wechat.dylib` (119 MB `__text`): 17 `mov w0, #0x43`, exactly one followed by
+  `bl malloc`, in the function at file address `0x563e76c`.
+- The launcher links only `libwxld.dylib`, so `wechat.dylib` loads after `main`.
+  BIBOYANG425's patch (continue to `main`, then search) stops too early. Use a pending
+  breakpoint that resolves when the dylib loads: `breakpoint set -a 0x563e76c -s wechat.dylib`.
+  The address changes with every WeChat build; re-derive it each time.
+
+Still unverified: that `x1+8` points at the key string on 4.1.15. One live run settles it:
+re-sign (step 1), attach lldb, quit and relaunch WeChat, open chats so each DB opens. SIP
+should not need disabling here (the July lldb attach worked on the re-signed app), but
+BIBOYANG425 reports re-signed WeChat failing to launch on Sequoia, so check it launches
+first.
+
 ## MCP Server
 
 ### Setup (one-time)
