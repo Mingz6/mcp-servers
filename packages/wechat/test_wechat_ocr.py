@@ -77,11 +77,16 @@ def open_chat():
     return w.parse_open_chat(PANE_LINES, STAMPS, 1.0, 1280, 1440)
 
 
+def public(msgs):
+    return [w._public(m) for m in msgs]
+
+
 class OpenChatTests(unittest.TestCase):
     def test_title_and_messages(self):
         chat = open_chat()
         self.assertEqual(chat["title"], "群聊(3)")
-        self.assertEqual(chat["messages"], [
+        self.assertEqual((chat["messages"][0]["y"], chat["messages"][0]["y2"]), (255, 320))  # label to last line
+        self.assertEqual(public(chat["messages"]), [
             {"t": "07:30", "side": "in", "sender": "Bob", "text": "你好\n再见"},
             {"t": "07:30", "side": "in", "sender": "Carol", "text": "[non-text message]"},
             {"t": "07:30", "side": "out", "sender": "me", "text": "收到"},
@@ -90,7 +95,7 @@ class OpenChatTests(unittest.TestCase):
 
     def test_trailing_sticker_label_is_kept(self):
         chat = w.parse_open_chat([line("Carol", 315, 378, 41, 12)], [], 1.0, 1280, 1440)
-        self.assertEqual(chat["messages"], [{"t": "", "side": "in", "sender": "Carol", "text": "[non-text message]"}])
+        self.assertEqual(public(chat["messages"]), [{"t": "", "side": "in", "sender": "Carol", "text": "[non-text message]"}])
 
     def test_one_to_one_ignores_label_like_text_from_images_and_keeps_cards_incoming(self):
         pane = [
@@ -110,7 +115,65 @@ class OpenChatTests(unittest.TestCase):
     def test_one_to_one_chat_uses_title_as_sender(self):
         pane = [line("Mom", 261, 18, 40, 19), line("hi there", 326, 284, 60, 17)]
         chat = w.parse_open_chat(pane, [], 1.0, 1280, 1440)
-        self.assertEqual(chat["messages"], [{"t": "", "side": "in", "sender": "Mom", "text": "hi there"}])
+        self.assertEqual(public(chat["messages"]), [{"t": "", "side": "in", "sender": "Mom", "text": "hi there"}])
+
+    def test_a_misread_stamp_is_a_stamp_not_a_message(self):
+        misread = line("Saturdav 09.21|", 720, 139, 90, 12)
+        pane = [line("Mom", 261, 18, 40, 19), misread, line("see you then", 326, 184, 80, 17)]
+        chat = w.parse_open_chat(pane, [misread], 1.0, 1280, 1440)
+        self.assertEqual(public(chat["messages"]), [{"t": "Saturdav 09:21", "side": "in", "sender": "Mom", "text": "see you then"}])
+
+    def test_title_bar_icons_are_not_a_title(self):
+        pane = [line("日<", 1671, 18, 34, 15), line("hi there", 326, 284, 60, 17)]
+        self.assertEqual(w.parse_open_chat(pane, [], 1.0, 1800, 1131)["title"], "")
+
+    def test_a_title_the_full_pass_drops_is_read_from_a_crop(self):
+        body = [line(f"message line {i}", 652, 200 + 40 * i, 240, 34) for i in range(6)]  # 2x pixels
+        calls = []
+
+        def run(cmd, timeout=120):
+            calls.append(cmd)
+            if cmd[1] == "window":
+                return json.dumps({"id": 7, "x": 0, "y": 38, "w": 900, "h": 600, "onscreen": True})
+            if cmd[0] == "screencapture":  # just the PNG header: width 1800, height 1200
+                Path(cmd[-1]).write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + (1800).to_bytes(4, "big") + (1200).to_bytes(4, "big"))
+                return ""
+            if "--crop" not in cmd:
+                return json.dumps({"w": 1800, "h": 1200, "lines": [line("日<", 3343, 36, 68, 31)] + body, "reds": []})
+            crop = cmd[cmd.index("--crop") + 1]
+            title = [line("小鹿大大美女fC1909", 520, 36, 439, 41)] if crop.split(",")[1] == "0" else []
+            return json.dumps({"w": 1800, "h": 1200, "lines": title, "reds": []})
+
+        with mock.patch.object(w, "_helper", return_value="wxvision"), mock.patch.object(w, "_run", side_effect=run):
+            win, ocr, _, stamps = w.read_window(chat_only=True)
+        chat = w.parse_open_chat(ocr["lines"], stamps, 2.0, 1800, 1200)
+        self.assertEqual(chat["title"], "小鹿大大美女fC1909")
+        self.assertEqual(len(chat["messages"]), 1)
+        full = next(c for c in calls if c[1] == "ocr" and "--crop" not in c)
+        self.assertEqual(full[full.index("--rows") + 1], "580,1760")  # the chat pane, scroll bar left out
+
+    def test_text_on_a_sticker_or_cover_is_marked_as_image_and_keeps_the_sender(self):
+        paper, bubble, window = [28, 28, 28], [46, 46, 47], [30, 30, 31]
+        lines = [
+            line("群聊(3)", 261, 18, 196, 19),
+            {**line("Carol", 315, 200, 41, 12), "bgc": [window, window]},
+            {**line("咬牙切齿", 340, 230, 60, 17), "bgc": [[232, 232, 232], [246, 224, 196]]},  # sticker caption
+            {**line("Bob", 315, 400, 41, 12), "bgc": [window, window]},
+            {**line("see you at six", 340, 430, 90, 17), "bgc": [bubble, [232, 200, 50]]},  # emoji on one side
+            {**line("on my way", 1150, 500, 60, 17), "bgc": [[52, 192, 130], [52, 192, 130]]},  # my green bubble
+        ]
+        chat = w.parse_open_chat(lines, [], 1.0, 1280, 1440, paper)
+        self.assertEqual([(m["sender"], m["text"]) for m in chat["messages"]], [
+            ("Carol", "[image] 咬牙切齿"), ("Bob", "see you at six"), ("me", "on my way")])
+        self.assertFalse(w.on_image(lines[2], None, 1.0))  # an old recording has no paper colour: nothing is marked
+        self.assertFalse(w._solid({"text": "[image] 好"}))  # the prefix does not make a short caption an anchor
+
+    def test_text_read_off_my_avatar_is_not_part_of_my_message(self):
+        pane = [line("Mom", 261, 18, 40, 19), line("on my way", 1640, 300, 70, 17), line("品", 1734, 298, 39, 30)]
+        chat = w.parse_open_chat(pane, [], 1.0, 1800, 1131)
+        self.assertEqual(public(chat["messages"]), [{"t": "", "side": "out", "sender": "me", "text": "on my way"}])
+        with mock.patch.object(w, "AVATAR_W", 0):  # without the avatar column the glyph lands in the message
+            self.assertIn("品", w.parse_open_chat(pane, [], 1.0, 1800, 1131)["messages"][0]["text"])
 
     def test_merge_fragments_joins_split_name_but_not_far_pieces(self):
         parts = [line("小鹿", 100, 50, 30, 15), line("凶", 140, 51, 12, 15), line("far", 400, 50, 20, 15)]
@@ -161,6 +224,16 @@ class MergeTests(unittest.TestCase):
         ok = msg("ok")
         self.assertIsNone(w.merge_transcripts([A, ok], [ok, E]))
 
+    def test_the_sticker_placeholder_is_not_proof_of_overlap(self):
+        sticker = msg(w.NON_TEXT)
+        self.assertIsNone(w.merge_transcripts([C, D, sticker], [sticker, A, B]))
+
+    def test_an_older_screen_never_lands_after_the_newest_message(self):
+        repeat = dict(D)  # the same text sent twice, days apart
+        self.assertEqual(self.texts(w.merge_transcripts([B, C, D], [repeat, A])), list("bcda"))  # direction unknown
+        self.assertEqual(self.texts(w.merge_transcripts([B, C, D], [repeat, A], toward_older=True)), list("bcd"))
+        self.assertEqual(self.texts(w.merge_transcripts([C, D, E], [A, B, C], toward_older=True)), list("abcde"))
+
     def test_one_long_message_is_enough(self):
         self.assertEqual(self.texts(w.merge_transcripts([A, B], [B, C])), list("abc"))
 
@@ -194,6 +267,55 @@ class MergeTests(unittest.TestCase):
         msgs = [msg("x", ""), msg("y", "07:30"), msg("z", "")]
         w._fill_stamps(msgs)
         self.assertEqual([m["t"] for m in msgs], ["", "07:30", "07:30"])
+
+
+def screen_rows(top, height=900, blank_every=5):
+    """Row hashes of a pane showing a long virtual chat from content row `top` down; title and input box blank."""
+    rows = [0] * height
+    for r in range(w.BODY_TOP, height - w.INPUT_H):
+        g = top + r
+        rows[r] = 0 if g % blank_every == 0 else (7 if g % 11 == 0 else 10_000 + g)  # 7: bubble padding, repeats
+    return rows
+
+
+class ScrollShiftTests(unittest.TestCase):
+    def test_rows_measure_the_scroll(self):
+        self.assertEqual(w.pane_shift(screen_rows(500), screen_rows(380), 1.0), 120)  # moved down: older
+        self.assertEqual(w.pane_shift(screen_rows(380), screen_rows(500), 1.0), -120)
+        self.assertEqual(w.pane_shift(screen_rows(500), screen_rows(500), 1.0), 0)
+        self.assertIsNone(w.pane_shift(screen_rows(500), screen_rows(5000), 1.0))  # a whole screen apart
+        self.assertIsNone(w.pane_shift(screen_rows(500), screen_rows(500, height=800), 1.0))  # window resized
+        self.assertIsNone(w.pane_shift(None, screen_rows(500), 1.0))  # an old recording without rows
+
+    def test_a_message_cut_off_at_the_top_is_replaced_by_its_whole_self(self):
+        first = [{**msg("after lunch"), "sender": "", "y": 85, "y2": 110},  # its first lines and label were above
+                 {**D, "y": 200, "y2": 230}]
+        acc = w._placed(first, 0)
+        second = [{**B, "y": 90, "y2": 120}, {**C, "y": 150, "y2": 210}, {**D, "y": 300, "y2": 330}]
+        merged = w.shift_merge(acc, w._placed(second, 100))
+        self.assertEqual([(m["sender"], m["text"]) for m in merged],
+                         [("Mom", B["text"]), ("Mom", C["text"]), ("Mom", D["text"])])
+
+    def test_pieces_of_one_cover_are_replaced_by_its_whole_read(self):
+        pieces = [{**msg(t), "sender": "", "y": y, "y2": y + 30}
+                  for t, y in (("[image] age 29", 10), ("[image] worth 30 billion", 60), ("wears clogs", 110))]
+        acc = w._placed(pieces + [{**D, "y": 300, "y2": 330}], 0)
+        whole = {**msg("[image] super product / age 29 / worth 30 billion / wears clogs"), "y": 200, "y2": 360}
+        merged = w.shift_merge(acc, w._placed([whole, {**D, "y": 500, "y2": 530}], 200))
+        self.assertEqual([(m["sender"], m["text"]) for m in merged], [("Mom", whole["text"]), ("Mom", D["text"])])
+        short = {**msg("[image] age 29 / worth"), "y": 200, "y2": 300}  # a partial read spanning two pieces keeps both
+        self.assertEqual(len(w.shift_merge(acc, w._placed([short], 200))), 4)
+
+    def test_a_screen_of_stickers_lines_up_by_its_rows(self):
+        acc = w._placed([{**C, "y": 400, "y2": 440}, {**D, "y": 500, "y2": 540}], 0)
+        stickers = [{**msg(w.NON_TEXT), "y": y, "y2": y + 20} for y in (150, 250, 350)]
+        shot = {"open_chat": {"title": "Mom", "messages": stickers + [{**C, "y": 520, "y2": 560}]},
+                "rows": screen_rows(380), "scale": 1.0}
+        merged, off, d = w.merge_screen(acc, 0, screen_rows(500), shot, toward_older=True)
+        self.assertEqual((off, d), (120, 120))
+        self.assertEqual([m["text"] for m in merged], [w.NON_TEXT] * 3 + [C["text"], D["text"]])
+        no_rows = {**shot, "open_chat": {"title": "Mom", "messages": stickers}, "rows": None}
+        self.assertEqual(w.merge_screen(acc, 0, screen_rows(500), no_rows, toward_older=True), (None, 0, None))
 
 
 class DataDirCase(unittest.TestCase):
@@ -305,6 +427,20 @@ class StampTests(unittest.TestCase):
         self.assertEqual(w.absolute_stamp("", self.NOW), "")
         self.assertEqual(w.absolute_stamp("Someday 09:01", self.NOW), "Someday 09:01")
         self.assertEqual(w.absolute_stamp("2026-10-08 09:01", self.NOW), "2026-10-08 09:01")
+
+    def test_misread_stamps_are_repaired(self):
+        cases = {
+            "Saturdav 09.21|": "Saturdav 09:21",
+            "Yesterday 21:A7": "Yesterday 21:47",
+            "10/5 12・00": "10/5 12:00",
+            "好的": "好的",
+            "OK.SO": "OK.SO",  # too few digits to be a time
+        }
+        for raw, want in cases.items():
+            self.assertEqual(w.clean_stamp(raw), want, raw)
+        self.assertEqual(w.absolute_stamp(w.clean_stamp("Saturdav 09.21|"), self.NOW), "2026-10-10 09:21")
+        self.assertTrue(w.is_stamp("Saturdav 09.21|"))
+        self.assertFalse(w.is_stamp("see you at 9"))
 
     def test_oldest_date(self):
         msgs = [msg("x", ""), msg("y", "Thursday 09:01"), msg("z", "Yesterday 08:08")]
@@ -521,6 +657,136 @@ class AutoReadTests(DataDirCase):
         with mock.patch.object(w, "_screen_locked", return_value=True):
             res = w.auto_read(desk, snap=desk.snap)
         self.assertEqual((res["stopped"], desk.clicks), ("the screen is locked", []))
+
+    def test_a_window_on_another_desktop_is_brought_over(self):
+        class Away(FakeDesk):
+            raised = False
+
+            def window(self):
+                return {**super().window(), "onscreen": self.raised}
+
+            def raise_window(self):
+                self.raised = True
+
+        res = self.run_read(Away(_long_chat()), days=3)
+        self.assertTrue(res["chats"] and res["chats"][0]["stopped"].startswith("reached"), res["stopped"])
+
+    def test_scroll_steps_read_the_open_chat_only(self):
+        desk = FakeDesk(_long_chat())
+        calls = {"full": 0, "chat": 0}
+
+        def counted(kind):
+            def snap():
+                calls[kind] += 1
+                return desk.snap()
+            return snap
+
+        clock = mock.Mock(monotonic=mock.Mock(return_value=0), sleep=mock.Mock())
+        with mock.patch.object(w, "time", clock), mock.patch.object(w, "_screen_locked", return_value=False):
+            res = w.auto_read(desk, snap=counted("full"), chat_snap=counted("chat"), days=3)
+        self.assertTrue(res["chats"][0]["stopped"].startswith("reached"))
+        self.assertEqual(calls["full"], 1)  # the chat list is read once, to find the row
+        self.assertGreater(calls["chat"], 5)
+
+    def test_a_run_of_stickers_does_not_stop_the_read_when_rows_measure_the_scroll(self):
+        class Measured(FakeDesk):  # every message 100 px tall; the pane's pixel rows follow the scroll
+            def snap(self):
+                s = super().snap()
+                for i, m in enumerate(s["open_chat"]["messages"]):
+                    m.update(y=w.BODY_TOP + 100 * i + 10, y2=w.BODY_TOP + 100 * i + 70)
+                return {**s, "rows": screen_rows(self.pos * 100, height=1131), "scale": 1.0}
+
+        chat = _long_chat()
+        for m in chat[18:30]:  # more stickers in a row than one screen holds
+            m["text"] = w.NON_TEXT
+        res = self.run_read(Measured(chat), days=3)
+        mom = res["chats"][0]
+        self.assertTrue(mom["stopped"].startswith("reached 3 days"), mom["stopped"])
+        texts = [m["text"] for m in mom["messages"]]
+        self.assertEqual(texts, [c["text"] for c in chat][-len(texts):])  # contiguous, each sticker once
+        self.assertNotIn("y", mom["messages"][0])  # positions stay internal
+        self.data_dir.joinpath("chats", "Mom.json").unlink()
+        blind = self.run_read(FakeDesk(chat), days=3)["chats"][0]  # text alone loses its place in the stickers
+        self.assertFalse(blind["stopped"].startswith("reached"), blind["stopped"])
+
+
+def stamped(text, t, sender="Mom", side="in"):
+    return {"t": t, "side": side, "sender": sender if side == "in" else ("me" if side == "out" else ""), "text": text}
+
+
+class TidyTests(DataDirCase):
+    def test_a_block_merged_at_the_wrong_spot_goes_back_in_time_order(self):
+        msgs = [
+            stamped("photos from the open house", "2026-10-10 08:08"),
+            stamped("what did the agent say", "2026-10-11 20:37"),
+            stamped("I will look it up online", "2026-10-11 22:03", side="out"),
+            stamped("ok got it thanks", "2026-10-10 09:21", side="out"),  # an older screen stitched in at the end
+            stamped("done yet? send it tomorrow", "2026-10-12 01:31"),
+            stamped("the bank can do it next week", "2026-10-11 20:43"),
+        ]
+        w._write_chat("Mom", msgs, "2026-10-12T10:00:00")
+        saved = json.loads((self.data_dir / "chats" / "Mom.json").read_text(encoding="utf-8"))
+        self.assertEqual([m["t"][-5:] for m in saved], ["08:08", "09:21", "20:37", "20:43", "22:03", "01:31"])
+
+    def test_one_spelling_for_the_other_person_in_a_one_to_one_chat(self):
+        msgs = [stamped(f"message number {i}", "2026-10-11 08:00", sender=s)
+                for i, s in enumerate(["小鹿。", "小鹿◎", "小鹿啄", "小鹿い", "小鹿。"])]
+        w._write_chat("小鹿®", msgs, "2026-10-12T10:00:00")
+        saved = json.loads((self.data_dir / "chats" / "小鹿.json").read_text(encoding="utf-8"))
+        self.assertEqual({m["sender"] for m in saved}, {"小鹿"})
+
+    def test_group_senders_collapse_but_different_people_stay_apart(self):
+        senders = ["Bobby", "Bobbyy", "Lena", "Lina", "山间小路一abc区", "山间小路一abc区", "山间小路—abc区", "山间小路-"]
+        names = w.canonical_senders(senders, "周末徒步群（12）")
+        self.assertEqual(names["Bobbyy"], "Bobby")
+        self.assertEqual((names["Lena"], names["Lina"]), ("Lena", "Lina"))
+        self.assertEqual({names[s] for s in senders[4:]}, {"山间小路一abc区"})
+
+    def test_stamp_lines_and_a_message_read_twice_are_dropped_and_gaps_keep_their_place(self):
+        msgs = [
+            stamped("are you coming tomorrow?", "2026-10-11 21:24", sender="Bobby"),
+            stamped("are you c0ming tomorrow?", "2026-10-11 21:24", sender="Bobbyy"),
+            stamped("Saturdav 09.21|", "2026-10-11 21:24", side="system"),
+            stamped("top of a screen, no stamp in view", "", sender="Lena"),
+            stamped("later that night", "2026-10-11 21:40", sender="Lena"),
+        ]
+        out = w.tidy(msgs, "周末徒步群（12）")
+        self.assertEqual([(m["sender"], m["text"][:8], m["t"][-5:]) for m in out], [
+            ("Bobby", "are you ", "21:24"),
+            ("Lena", "top of a", "21:24"),
+            ("Lena", "later th", "21:40"),
+        ])
+
+    def test_retidy_rewrites_saved_transcripts(self):
+        chats = self.data_dir / "chats"
+        chats.mkdir(parents=True)
+        bad = [stamped("second message here", "2026-10-11 09:00"), stamped("first message here", "2026-10-11 08:00")]
+        (chats / "Mom.json").write_text(json.dumps(bad), encoding="utf-8")
+        (chats / "Mom.md").write_text("# Mom\n_captured 2026-10-11T10:00:00, screenshot OCR_\n", encoding="utf-8")
+        self.assertEqual(w.retidy_saved(), ["Mom"])
+        md = (chats / "Mom.md").read_text(encoding="utf-8").split("\n")
+        self.assertTrue(md[3].endswith("first message here") and md[4].endswith("second message here"), md)
+
+
+def raw_frame(lines, captured_at="2026-10-12T10:00:00"):
+    pane = [line("Mom", 261, 18, 40, 19)] + [line(t, 326, 200 + 100 * i, 200, 17) for i, t in enumerate(lines)]
+    return {"captured_at": captured_at, "win": {"x": 0, "y": 0, "w": 1280, "h": 1440, "id": 1},
+            "ocr": {"w": 1280, "h": 1440, "lines": pane, "reds": []}, "side": [],
+            "stamps": [line("Yesterday 08:00", 720, 150, 90, 12)]}
+
+
+class ReplayTests(DataDirCase):
+    def test_replay_merges_recorded_screens_without_capturing(self):
+        frames = self.data_dir / "frames" / "run"
+        frames.mkdir(parents=True)
+        screens = [[C["text"], D["text"]], [A["text"], B["text"], C["text"]]]  # the second scrolled up
+        for i, texts in enumerate(screens):
+            (frames / f"{i:04d}.json").write_text(json.dumps(raw_frame(texts)), encoding="utf-8")
+        with mock.patch.object(w, "_run", side_effect=AssertionError("replay must not capture")):
+            chats = w.replay(frames)
+        self.assertEqual([(c["title"], c["frames"], c["skipped"]) for c in chats], [("Mom", 2, 0)])
+        self.assertEqual([m["text"] for m in chats[0]["messages"]], [A["text"], B["text"], C["text"], D["text"]])
+        self.assertEqual(chats[0]["messages"][0]["t"], "2026-10-11 08:00")
 
 
 if __name__ == "__main__":

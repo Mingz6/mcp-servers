@@ -1,15 +1,21 @@
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 import Vision
 
 // Helper for wechat_ocr.py. Build: swiftc -O wxvision.swift -o wxvision
 //   wxvision window        -> JSON: the main WeChat window {id, x, y, w, h, onscreen}
-//   wxvision ocr <png> [--crop x,y,w,h] [--scale N]
-//                          -> JSON: {w, h, lines:[{text, conf, x, y, w, h}], reds:[{x, y, w, h}]}
+//   wxvision ocr <png> [--crop x,y,w,h] [--scale N] [--rows x0,x1]
+//                          -> JSON: {w, h, paper, lines:[{text, conf, x, y, w, h, bgc}], reds:[{x, y, w, h}], rows}
 // Coordinates are original-image pixels, origin top-left, even with --crop/--scale. Cropping to a narrow
 // strip and upscaling makes Vision read small gray text (chat timestamps) far better than the full window.
 // reds = red blobs (unread badges) in the left 20% of the full image.
+// bgc = mean [r, g, b] of a thin strip just left and one just right of the line ([] where the strip falls off the
+// image); paper = the most common colour of the whole image (the window background). Text on a chat bubble sits
+// on a colour close to paper; text printed on a sticker, photo or video cover usually does not.
+// rows (with --rows) = one hash per pixel row of columns x0..<x1 of the full image, 0 for a row of one colour.
+// The same content scrolled to another height hashes the same, so matching rows of two screens measures the scroll.
 //
 // Real input, for reading chats while the user is away (needs Accessibility permission):
 //   wxvision input             -> JSON: {idle, key, x, y} seconds since any / key input, pointer position
@@ -17,6 +23,8 @@ import Vision
 //   wxvision move x y          -> put the pointer back (no click); x y are global points, origin top-left
 //   wxvision click x y         -> left click
 //   wxvision scroll x y dy     -> scroll wheel at x y, dy in pixels
+//   wxvision raise             -> un-minimize and raise the main WeChat window and make WeChat frontmost,
+//                                 which also switches to the desktop (Space) the window is on
 // click and scroll refuse unless a WeChat window is the topmost window at x y, so a stray event can never
 // land in another app.
 
@@ -56,14 +64,63 @@ func mainWindow() -> [String: Any]? {
     return best
 }
 
-func redBoxes(_ img: CGImage) -> [[String: Int]] {
+func rgba(_ img: CGImage) -> [UInt8] {
     let w = img.width, h = img.height
-    let regionW = Int(Double(w) * 0.2)
     var buf = [UInt8](repeating: 0, count: w * h * 4)
     guard let ctx = CGContext(data: &buf, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
                               space: CGColorSpaceCreateDeviceRGB(),
                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return [] }
     ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+    return buf
+}
+
+func surround(_ buf: [UInt8], _ w: Int, _ h: Int, x: Int, y: Int, bw: Int, bh: Int) -> [[Int]] {
+    guard !buf.isEmpty else { return [] }
+    let gap = max(2, bh / 6), strip = max(4, bh / 2)
+    return [(x - gap - strip, x - gap), (x + bw + gap, x + bw + gap + strip)].map { (x0, x1) -> [Int] in
+        var sum = [0, 0, 0], n = 0
+        for row in max(y + bh / 4, 0)..<max(min(y + bh * 3 / 4, h), 0) {
+            for col in max(x0, 0)..<max(min(x1, w), 0) {
+                let i = (row * w + col) * 4
+                for c in 0..<3 { sum[c] += Int(buf[i + c]) }
+                n += 1
+            }
+        }
+        return n == 0 ? [] : sum.map { $0 / n }
+    }
+}
+
+func paperColour(_ buf: [UInt8], _ w: Int, _ h: Int) -> [Int] {
+    guard !buf.isEmpty else { return [] }
+    var bins = [Int](repeating: 0, count: 1 << 15)
+    for i in stride(from: 0, to: w * h * 4, by: 4 * 7) {
+        bins[(Int(buf[i]) >> 3) << 10 | (Int(buf[i + 1]) >> 3) << 5 | Int(buf[i + 2]) >> 3] += 1
+    }
+    let top = bins.indices.max { bins[$0] < bins[$1] } ?? 0
+    return [(top >> 10) << 3 | 4, ((top >> 5) & 31) << 3 | 4, (top & 31) << 3 | 4]
+}
+
+func rowHashes(_ buf: [UInt8], _ w: Int, _ h: Int, x0: Int, x1: Int) -> [UInt32] {
+    let a = max(0, min(x0, w)), b = max(a, min(x1, w))
+    guard !buf.isEmpty, b > a else { return [] }
+    return (0..<h).map { row -> UInt32 in
+        let first = (row * w + a) * 4
+        var hash: UInt32 = 2166136261
+        var flat = true
+        for col in a..<b {
+            let i = (row * w + col) * 4
+            for c in 0..<3 {
+                hash = (hash ^ UInt32(buf[i + c])) &* 16777619
+                if abs(Int(buf[i + c]) - Int(buf[first + c])) > 3 { flat = false }
+            }
+        }
+        return flat ? 0 : max(hash, 1)
+    }
+}
+
+func redBoxes(_ buf: [UInt8], _ w: Int, _ h: Int) -> [[String: Int]] {
+    guard !buf.isEmpty else { return [] }
+    let regionW = Int(Double(w) * 0.2)
     let cell = 4
     let gw = regionW / cell + 1, gh = h / cell + 1
     var grid = [Bool](repeating: false, count: gw * gh)
@@ -166,15 +223,24 @@ case "ocr":
     request.recognitionLanguages = ["zh-Hans", "en-US"]
     request.usesLanguageCorrection = false
     do { try VNImageRequestHandler(cgImage: target, options: [:]).perform([request]) } catch { fail("OCR failed: \(error)") }
+    let pixels = rgba(cg)
     for obs in request.results ?? [] {
         guard let cand = obs.topCandidates(1).first else { continue }
         let b = obs.boundingBox
+        let lx = cropX + Int(b.minX * W), ly = cropY + Int((1 - b.maxY) * H), lw = Int(b.width * W), lh = Int(b.height * H)
         lines.append([
-            "text": cand.string, "conf": Double(cand.confidence),
-            "x": cropX + Int(b.minX * W), "y": cropY + Int((1 - b.maxY) * H), "w": Int(b.width * W), "h": Int(b.height * H),
+            "text": cand.string, "conf": Double(cand.confidence), "x": lx, "y": ly, "w": lw, "h": lh,
+            "bgc": surround(pixels, fullW, fullH, x: lx, y: ly, bw: lw, bh: lh),
         ])
     }
-    emit(["w": fullW, "h": fullH, "lines": lines, "reds": redBoxes(cg)])
+    var out: [String: Any] = ["w": fullW, "h": fullH, "paper": paperColour(pixels, fullW, fullH), "lines": lines,
+                              "reds": redBoxes(pixels, fullW, fullH)]
+    if let i = args.firstIndex(of: "--rows"), i + 1 < args.count {
+        let p = args[i + 1].split(separator: ",").compactMap { Int($0) }
+        guard p.count == 2 else { fail("bad --rows") }
+        out["rows"] = rowHashes(pixels, fullW, fullH, x0: p[0], x1: p[1]).map { Int($0) }
+    }
+    emit(out)
 case "input":
     let src = CGEventSourceStateID.combinedSessionState
     let kinds: [CGEventType] = [.mouseMoved, .leftMouseDown, .rightMouseDown, .scrollWheel, .keyDown]
@@ -199,6 +265,31 @@ case "scroll":
     requireWeChat(at: p)
     moveCursor(p)
     CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: dy, wheel2: 0, wheel3: 0)?.post(tap: .cghidEventTap)
+case "raise":
+    guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.tencent.xinWeChat").first else {
+        fail("WeChat is not running")
+    }
+    let ax = AXUIElementCreateApplication(app.processIdentifier)
+    var raised = false
+    var value: CFTypeRef?
+    if AXUIElementCopyAttributeValue(ax, kAXWindowsAttribute as CFString, &value) == .success,
+       let wins = value as? [AXUIElement] {
+        var best: AXUIElement? = nil
+        var bestArea: CGFloat = 0
+        for w in wins {
+            var sv: CFTypeRef?
+            var size = CGSize.zero
+            guard AXUIElementCopyAttributeValue(w, kAXSizeAttribute as CFString, &sv) == .success, let s = sv,
+                  CFGetTypeID(s) == AXValueGetTypeID(), AXValueGetValue(s as! AXValue, .cgSize, &size) else { continue }
+            if size.width * size.height > bestArea { bestArea = size.width * size.height; best = w }
+        }
+        if let w = best {
+            AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+            raised = AXUIElementPerformAction(w, kAXRaiseAction as CFString) == .success
+        }
+    }
+    AXUIElementSetAttributeValue(ax, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+    emit(["raised": raised])
 default:
     fail("unknown command \(args[1])")
 }

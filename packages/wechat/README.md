@@ -36,8 +36,9 @@ python3 wechat_ocr.py --json     # same, as JSON
 - `wechat_screen_snapshot` and `--stitch` never click, so they never mark a chat as read. A background click
   (`postToPid`) on the chat list was tried on 2026-10-11 and WeChat ignored it; real input is only used by
   `--auto-read` below, which needs a quiet Mac.
-- Limits: OCR is approximate. Group names are cut by WeChat itself, emoji are lost, stickers and images show
-  as `[non-text message]`, and each chat shows only its last preview unless it is the open chat. To get a
+- Limits: OCR is approximate. Group names are cut by WeChat itself, emoji are lost, stickers and photos show
+  as `[non-text message]`, text printed on a sticker, cover or screenshot shows as `[image] <text>`, and each
+  chat shows only its last preview unless it is the open chat. To get a
   chat's recent messages, leave that chat open in WeChat before the capture. History only covers moments a
   capture ran (every MCP call and every `/life` scan).
 - Several days of one chat: open it in WeChat, then run `python3 wechat_ocr.py --stitch 90 --chat <name>` and
@@ -53,15 +54,32 @@ python3 wechat_ocr.py --json     # same, as JSON
   Transfer, Subscriptions and similar), opened by clicking the row, and scrolled back until a time stamp
   older than `--days` shows. The scroll direction is learned on the first chat. Limits: opening a chat marks
   it read, on the phone too; emoji-heavy names come out garbled in the list, so the chat that actually
-  opened is read and saved under its own header title; the Mac must not be locked or asleep.
+  opened is read and saved under its own header title; the Mac must be unlocked (with `--wait`, a locked
+  screen counts as "not quiet yet" and the run waits for unlock plus `--idle`). A WeChat window on another
+  desktop is raised first.
   `wxvision click/scroll` refuse unless a WeChat window is the topmost window at that point.
   Scroll size is calibrated (a wheel step of d moves the pane about d+50 pt; it starts at 30% of the pane and
   adapts). A screen that does not move (same text positions) means the top of the chat; a screen of only
   images keeps scrolling. The chat list is re-read before every click because it reorders on new messages, and
   with `--chats` the opened title must match the name or the chat is skipped (the row is found again and clicked
   once more before giving up). A chat-list title that Vision drops (a time with no name beside it, seen with a
-  short name plus emoji) is re-read from a thin crop. `--trace` prints every screen read
-  to stderr (it contains chat text).
+  short name plus emoji) is re-read from a thin crop, and so is an open chat's header title. `--trace` prints every
+  screen read to stderr (it contains chat text).
+- How screens are joined: `wxvision ocr --rows x0,x1` hashes every pixel row of the chat pane (scroll bar left
+  out). Rows that appear once on each of two screens vote for the scroll distance (at least 8 votes, twice the
+  runner-up); every message then gets a position in the whole chat and a screen is merged by position, so a
+  screen of stickers or one tall image still lines up and a message cut off at the top is replaced by its whole
+  read. When the rows don't agree (an animated sticker, a new message arriving) the old text merge is the
+  fallback: it needs one long message, or two, in common. On a recorded group chat this took screens that
+  failed to line up from 25 of 49 to 1 of 49.
+- What isn't a message: text in the avatar column at the right edge (Vision reads my avatar as "品"), a line
+  on a picture (its left and right edges are not the plain pane or bubble colour; it is kept as `[image] ...`
+  so it can still anchor a merge), the title-bar icons, and the input box.
+- Debugging without clicking anything: `--auto-read --record` keeps every screen (PNG + raw OCR) in
+  `~/.wechat-export/ocr/frames/<time>/`; `--replay <dir> [--trace]` re-parses a recording offline,
+  `--reocr` OCRs its PNGs again after a `wxvision` change, `--write` replaces the saved transcripts with the
+  replayed ones, and `--retidy` runs every saved transcript through the cleanup pass again (stamps, sender
+  names read a few ways, time order).
 - Saved transcripts (`chats/<chat>.md` and `.json`) keep real dates ("2026-10-10 08:08"), not "Yesterday", and a
   later capture is merged into the saved one when the screens overlap. A capture that shares no message with the
   saved one replaces it and the old file moves to `chats/_previous/`. A chat whose title OCRs a little differently
