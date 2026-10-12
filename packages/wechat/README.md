@@ -10,6 +10,66 @@ and run a **read-only** MCP server for live chat queries.
 | `extract_key.py` | Extracts encryption keys from WeChat memory (requires sudo) |
 | `export_messages.py` | Batch export all messages/contacts to JSON + Markdown |
 | `mcp_server.py` | MCP server — live chat queries, contact search, voice transcription (read-only) |
+| `wechat_ocr.py` + `wxvision.swift` | Reads WeChat from the screen with Apple Vision OCR. No keys, no re-sign. The working path on WeChat 4.1.15 |
+| `test_wechat_ocr.py` | Unit tests for the OCR parsers (synthetic lines): `python3 -m unittest test_wechat_ocr -v` |
+
+## Reading WeChat by screenshot + OCR (works on 4.1.15, no keys)
+
+The key-extraction steps below no longer work on WeChat 4.1.15 / macOS 27. The OCR reader replaces them
+for "what is happening in WeChat lately".
+
+```bash
+python3 wechat_ocr.py            # capture now, print chat list + open chat, save under ~/.wechat-export/ocr/
+python3 wechat_ocr.py --json     # same, as JSON
+```
+
+- It captures the main WeChat window (`screencapture -l`, so WeChat can sit behind other windows or on
+  another display), runs Vision OCR (Chinese + English), and parses the chat list (name, last time,
+  last-message preview, unread count) and the transcript of the chat that is open.
+- Needs Screen Recording permission for the app that launches it (VS Code, Terminal). The Swift helper
+  compiles itself on first run (`~/.wechat-export/bin/wxvision`).
+- Output: `~/.wechat-export/ocr/` (`latest.md`, `latest.json`, `chats/<chat>.md`, `activity.jsonl`). Created
+  `0700`, outside git.
+- MCP tools: `wechat_screen_snapshot` (capture now) and `wechat_screen_history` (what changed, last N days).
+  `wechat_query_chat`, `wechat_search_messages` and `wechat_recent_activity` fall back to the same data
+  when no database keys exist.
+- `wechat_screen_snapshot` and `--stitch` never click, so they never mark a chat as read. A background click
+  (`postToPid`) on the chat list was tried on 2026-10-11 and WeChat ignored it; real input is only used by
+  `--auto-read` below, which needs a quiet Mac.
+- Limits: OCR is approximate. Group names are cut by WeChat itself, emoji are lost, stickers and images show
+  as `[non-text message]`, and each chat shows only its last preview unless it is the open chat. To get a
+  chat's recent messages, leave that chat open in WeChat before the capture. History only covers moments a
+  capture ran (every MCP call and every `/life` scan).
+- Several days of one chat: open it in WeChat, then run `python3 wechat_ocr.py --stitch 90 --chat <name>` and
+  scroll up slowly (about half a screen every 2 s). It captures every ~2 s, merges overlapping screens into
+  one transcript and saves it under `chats/`. Scrolling faster than one screen per capture leaves a gap
+  (reported as `skipped` frames). Only the open chat is captured, and nothing is scrolled for you: if you
+  do not scroll during the run, the transcript stays at the one visible screen.
+- Hands-free reading of several chats: `python3 wechat_ocr.py --auto-read [--top 5 | --chats A,B] [--days 3]
+  [--idle 120] [--wait MINUTES]` (MCP tool `wechat_screen_read`). It uses real clicks and scroll-wheel events,
+  so it needs Accessibility permission for the launching app, and it only runs after `--idle` seconds
+  without keyboard or mouse input. It stops as soon as a key is pressed or the pointer moves, then puts the
+  pointer and the frontmost app back. Chats are taken from the visible chat list (first N, skipping File
+  Transfer, Subscriptions and similar), opened by clicking the row, and scrolled back until a time stamp
+  older than `--days` shows. The scroll direction is learned on the first chat. Limits: opening a chat marks
+  it read, on the phone too; emoji-heavy names come out garbled in the list, so the chat that actually
+  opened is read and saved under its own header title; the Mac must not be locked or asleep.
+  `wxvision click/scroll` refuse unless a WeChat window is the topmost window at that point.
+  Scroll size is calibrated (a wheel step of d moves the pane about d+50 pt; it starts at 30% of the pane and
+  adapts). A screen that does not move (same text positions) means the top of the chat; a screen of only
+  images keeps scrolling. The chat list is re-read before every click because it reorders on new messages, and
+  with `--chats` the opened title must match the name or the chat is skipped (the row is found again and clicked
+  once more before giving up). A chat-list title that Vision drops (a time with no name beside it, seen with a
+  short name plus emoji) is re-read from a thin crop. `--trace` prints every screen read
+  to stderr (it contains chat text).
+- Saved transcripts (`chats/<chat>.md` and `.json`) keep real dates ("2026-10-10 08:08"), not "Yesterday", and a
+  later capture is merged into the saved one when the screens overlap. A capture that shares no message with the
+  saved one replaces it and the old file moves to `chats/_previous/`. A chat whose title OCRs a little differently
+  each time (an emoji read as "い", "®", "。") still lands in the same file: `same_chat_title` treats names as one
+  chat when one is a prefix of the other with at most 2 extra characters ("(N)" unread counts are ignored).
+- Parser rules worth knowing: text starting right of x=420 pt is an outgoing bubble (`me`); in a 1:1 chat
+  (title without a `(N)` member count) text left of x=321 pt is image content and is ignored; the window
+  is usually 2x Retina, so all layout constants are in points and scaled by `ocr_width / window_width`.
 
 ## When to Run
 
@@ -104,7 +164,7 @@ cp /tmp/wechat_key.txt ~/.wechat-export/.primary_key.txt
 | `task_for_pid failed (kr=5)` | WeChat needs re-signing: `sudo codesign --force --deep --sign - /Applications/WeChat.app` then restart WeChat |
 | `WeChat is not running` | Launch WeChat and login first |
 | Keys don't work after restart | Re-run `extract_key.py` — WCDB regenerates keys on restart |
-| WeChat won't launch after re-sign | Reinstall from wechat.com, then re-sign |
+| WeChat won't launch after re-sign, or "Data Access Blocked" popup (macOS 27) | Restore: `ditto <backup>/WeChat.app.orig /Applications/WeChat.app`, or reinstall from wechat.com |
 | `Operation not permitted` | Run with `sudo` |
 
 ## Known Issue: WeChat 4.1+ Key Extraction (since ~June 2026)
@@ -172,7 +232,21 @@ Static check on 4.1.15 (lldb on the files, no attach, no sudo):
   breakpoint that resolves when the dylib loads: `breakpoint set -a 0x563e76c -s wechat.dylib`.
   The address changes with every WeChat build; re-derive it each time.
 
-Still unverified: that `x1+8` points at the key string on 4.1.15. One live run settles it:
+Harness: `find_key_lldb.py` derives the address itself and verifies each key against the DB
+headers (the function tests `size(x1)==0x63`, the length of `x'<96 hex>'`). `keytest.sh` runs it
+plus ydotdog's scanner (same memory scan as `extract_key.py`). The address moved from `0x563e76c` to
+`0x5645d04` within one day when WeChat auto-updated inside 4.1.15, so derive it every run.
+
+**Live test 2026-10-11 (macOS 27.0.1, WeChat 4.1.15): FAILED, and the ad-hoc re-sign is now a dead end.**
+After `codesign --sign -`, macOS shows "Data Access Blocked: WeChat tried to access your data from
+other apps" (the container is tied to Tencent's team ID `5A4RE8SF68`), and WeChat exits at launch.
+lldb attached and set the pending breakpoint (0 locations), then the process ended: 0 hits.
+The July claim above ("re-sign alone was enough, SIP was never the blocker") no longer holds on this
+OS. Matches BIBOYANG425's `docs/TROUBLESHOOTING.md` section 3. Without the re-sign, lldb gets
+"Not allowed to attach" and `task_for_pid` returns 5, so ydotdog's scanner and our `extract_key.py`
+cannot even read the process. Left open: the breakpoint path with SIP disabled (BIBOYANG425's
+actual recommendation), untested; it needs a Recovery-mode reboot. Restore after a test:
+`ditto ~/.wechat-export/keytest/WeChat.app.orig /Applications/WeChat.app`. One live run settles it:
 re-sign (step 1), attach lldb, quit and relaunch WeChat, open chats so each DB opens. SIP
 should not need disabling here (the July lldb attach worked on the re-signed app), but
 BIBOYANG425 reports re-signed WeChat failing to launch on Sequoia, so check it launches

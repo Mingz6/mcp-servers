@@ -19,9 +19,12 @@ STATUS: BROKEN as of 2026-06-16, retested 2026-07-07 — still broken
   permissions problem — the data isn't there. Only a breakpoint/hook at key
   derivation time (not memory scanning) could work now; see README.md.
   Track: cocohahaha/wechat-decrypt-macos + our packages/wechat/extract_key.py
-  2026-10-11 lead (WeChat 4.1.15): Thearas' breakpoint script find_key.py was never
-  run. The setCipherKey signature still matches exactly once, in wechat.dylib (not the
-  WeChat launcher it searches). Needs one live run; details in README.md.
+  2026-10-11 (WeChat 4.1.15, macOS 27): ran the breakpoint approach live. The ad-hoc re-sign now
+  makes WeChat exit at launch ("Data Access Blocked"), so lldb never sees a key. Only SIP-off is
+  left untested; details in README.md.
+  Working path today: screenshot + OCR (wechat_ocr.py, tools wechat_screen_snapshot and
+  wechat_screen_history; the query/search/activity tools fall back to it). Needs no keys.
+  wechat_screen_read opens chats and scrolls them with real input, only while the Mac is idle.
 
 Usage:
   # Start via MCP config (see README.md)
@@ -46,6 +49,8 @@ import pilk
 import zstandard as zstd
 
 from mcp.server.fastmcp import FastMCP
+
+import wechat_ocr
 
 # ---------------------------------------------------------------------------
 # Config
@@ -612,9 +617,85 @@ def _silk_to_text(silk_data: bytes, language: str = "zh") -> str:
 # Singleton
 wechat = WeChat()
 
+KEYLESS_NOTE = (
+    "(Database keys are unavailable on WeChat 4.1+, so this comes from screenshot OCR of the WeChat "
+    "window: only what the chat list and the open chat showed, approximate.)\n\n"
+)
+
 # ---------------------------------------------------------------------------
 # MCP Tools
 # ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def wechat_screen_snapshot(refresh: bool = True) -> str:
+    """Read WeChat from the screen, no database keys needed.
+
+    Returns the chat list (name, last-message time, preview, unread count) and the
+    transcript of whichever chat is open. Takes ~2 s, OCR so approximate. Clicks
+    nothing, so it never marks messages as read. WeChat must be running and logged in.
+
+    Args:
+        refresh: Capture the window now (default). False returns the last saved snapshot.
+    """
+    if refresh:
+        try:
+            snap = wechat_ocr.snapshot()
+            wechat_ocr.save(snap)
+            return wechat_ocr.render(snap)
+        except wechat_ocr.OcrError as e:
+            return f"Screen capture failed: {e}\n\n{_last_snapshot()}"
+    return _last_snapshot()
+
+
+def _last_snapshot() -> str:
+    path = wechat_ocr.DATA_DIR / "latest.md"
+    return path.read_text(encoding="utf-8") if path.exists() else "No saved WeChat screen snapshot yet."
+
+
+@mcp.tool()
+def wechat_screen_history(days: int = 7, chat: str = "", limit: int = 50) -> str:
+    """Chat-list changes captured from the screen over time, plus saved transcripts.
+
+    Each line is one change seen in the chat list (a new last-message preview), newest
+    first. Only as complete as the captures taken: run wechat_screen_snapshot regularly.
+
+    Args:
+        days: Look back this many days (default 7).
+        chat: Only chats whose name contains this text. Empty = all.
+        limit: Max change lines (default 50).
+    """
+    rows = wechat_ocr.history(days, chat)[:limit]
+    out = [f"Chat-list changes, last {days} days: {len(rows)}"]
+    for r in rows:
+        flag = f" [UNREAD {r['unread']}]" if r["unread"] else ""
+        out.append(f"[seen {r['seen_at']}] {r['chat']} ({r['time']}): {r['preview']}{flag}")
+    if chat:
+        out += ["", *wechat_ocr.saved_chats(chat)]
+    return "\n".join(out)
+
+
+@mcp.tool()
+def wechat_screen_read(chats: str = "", top: int = 5, days: int = 3) -> str:
+    """Open several chats and read back days of history, with real clicks and scrolls.
+
+    Only runs while nobody has touched the keyboard or mouse for 2 minutes, stops the moment the user
+    comes back, and restores the pointer and the frontmost app. Takes a few minutes. Opening a chat
+    marks it read, on the phone too. The chats must be in the visible part of WeChat's chat list.
+    Results are also saved as transcripts that wechat_screen_history(chat=...) returns.
+
+    Args:
+        chats: Comma-separated chat or group names. Empty = the first `top` chats in the list.
+        top: How many chats to read when `chats` is empty (default 5).
+        days: How many days back to scroll in each chat (default 3).
+    """
+    names = [c.strip() for c in chats.split(",") if c.strip()]
+    try:
+        res = wechat_ocr.auto_read(wechat_ocr.Desk(), names, top, days, per_chat_secs=150)
+    except wechat_ocr.OcrError as e:
+        return f"Screen read failed: {e}"
+    return wechat_ocr.render_auto(res, days)
+
 
 
 @mcp.tool()
@@ -634,7 +715,10 @@ def wechat_query_chat(
         limit: Max messages to return (default 50).
         text_only: If true, only return text messages (skip images, stickers, etc).
     """
-    matches = wechat.resolve_contact(contact)
+    try:
+        matches = wechat.resolve_contact(contact)
+    except FileNotFoundError:
+        return KEYLESS_NOTE + wechat_screen_history(chat=contact)
     if not matches:
         return f"No contact found matching '{contact}'"
 
@@ -717,7 +801,19 @@ def wechat_search_messages(query: str, limit: int = 20) -> str:
         query: Text to search for in message content.
         limit: Max results to return (default 20).
     """
-    results = wechat.search_all_messages(query, limit=limit)
+    try:
+        results = wechat.search_all_messages(query, limit=limit)
+    except FileNotFoundError:
+        q = query.lower()
+        hits = [
+            f"[seen {r['seen_at']}] {r['chat']} ({r['time']}): {r['preview']}"
+            for r in wechat_ocr.history(days=3650)
+            if q in r["chat"].lower() or q in r["preview"].lower()
+        ][:limit]
+        hits += [
+            line for t in wechat_ocr.saved_chats() for line in t.splitlines()[3:] if q in line.lower()
+        ][:limit]
+        return KEYLESS_NOTE + ("\n".join(hits) or f"No screen-captured text matching '{query}'")
     if not results:
         return f"No messages found matching '{query}'"
 
@@ -844,7 +940,10 @@ def wechat_recent_activity(days: int = 7, limit: int = 20) -> str:
         days: Look back this many days (default 7).
         limit: Max chats to return (default 20).
     """
-    name2id, _ = wechat.load_name2id()
+    try:
+        name2id, _ = wechat.load_name2id()
+    except FileNotFoundError:
+        return KEYLESS_NOTE + wechat_screen_snapshot()
     cutoff = int((datetime.now() - timedelta(days=days)).timestamp())
 
     chat_activity: dict[str, dict] = {}
