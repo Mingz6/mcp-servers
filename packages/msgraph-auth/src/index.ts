@@ -297,7 +297,8 @@ export function createMsGraphAuth(config: MsGraphAuthConfig): MsGraphAuth {
         console.error(`\n🔐 ${label} — Sign in required:`);
         console.error(response.message);
         console.error();
-        tryOpenBrowser(response.verificationUri);
+        // Callers that open their own window (msgraph-relogin.sh) set this to avoid a second tab.
+        if (process.env[`${envPrefix}_NO_BROWSER`] !== "1") tryOpenBrowser(response.verificationUri);
         notifyUser(label, response.userCode, response.verificationUri);
         void updateLock({
           verificationUri: response.verificationUri,
