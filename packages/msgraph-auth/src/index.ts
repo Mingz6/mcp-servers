@@ -144,6 +144,25 @@ export function createMsGraphAuth(config: MsGraphAuthConfig): MsGraphAuth {
     try { await unlink(LOCK_PATH); } catch { /* ignore */ }
   }
 
+  // A lock outlives its owner when that process exits mid sign-in (expired code, Ctrl-C).
+  // releaseLock() only removes our own, so without this every later run waits on a dead code.
+  function isStale(lock: AuthLock): boolean {
+    if (lock.expiresAt <= Date.now()) return true;
+    try {
+      process.kill(lock.pid, 0);
+      return false;
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code !== "EPERM";
+    }
+  }
+
+  async function removeStaleLock(stale: AuthLock): Promise<void> {
+    const current = await readLock();
+    // Re-read so we don't delete a fresh lock another process claimed after our first read.
+    if (current?.pid !== stale.pid || current.expiresAt !== stale.expiresAt) return;
+    try { await unlink(LOCK_PATH); } catch { /* ignore */ }
+  }
+
   // Surfaces the code another same-identity process already has pending, instead of
   // starting (and popping up) a second device-code flow for the same shared account.
   function waitOnOtherProcess(pca: PublicClientApplication, lock: AuthLock): AuthPendingError {
@@ -251,11 +270,12 @@ export function createMsGraphAuth(config: MsGraphAuthConfig): MsGraphAuth {
     // another of them already has a device code pending, reuse ITS code instead of opening a
     // second browser tab for the exact same sign-in.
     const existingLock = await readLock();
-    if (existingLock && existingLock.expiresAt > Date.now() && existingLock.pid !== process.pid) {
+    if (existingLock && existingLock.pid !== process.pid && !isStale(existingLock)) {
       pendingAuth = waitOnOtherProcess(pca, existingLock);
       return pendingAuth;
     }
-    if (existingLock) await releaseLock(); // ours or expired — clear before reclaiming
+    if (existingLock?.pid === process.pid) await releaseLock();
+    else if (existingLock) await removeStaleLock(existingLock);
 
     if (!(await claimLock(label))) {
       // Lost the race to another process that claimed it between our read and write.

@@ -143,7 +143,8 @@ export async function listInbox(
     params.$filter = filter;
   }
 
-  const data = await graphFetch("/me/messages", params);
+  // /me/messages spans every folder (Junk, Sent, GitHub...), so "inbox" has to name the folder.
+  const data = await graphFetch("/me/mailFolders/inbox/messages", params);
 
   return (data.value || []).map((msg: any) => ({
     id: msg.id,
@@ -218,21 +219,30 @@ export async function listUnread(top = 15): Promise<MailMessage[]> {
   return listInbox(top, "isRead eq false");
 }
 
+// Walks a "Parent/Child" path one level at a time; a bare name only matches top-level folders.
+async function resolveFolderId(path: string): Promise<string> {
+  let listUrl = "/me/mailFolders";
+  let id = "";
+  for (const name of path.split("/").map((p) => p.trim()).filter(Boolean)) {
+    const found = await graphFetch(listUrl, {
+      // OData escapes single quotes by doubling them. Folders like "Mike's stuff" otherwise 400.
+      $filter: `displayName eq '${name.replace(/'/g, "''")}'`,
+      $select: "id,displayName",
+    });
+    id = (found.value || [])[0]?.id;
+    if (!id) throw new Error(`Mail folder "${path}" not found (no "${name}" at that level)`);
+    listUrl = `/me/mailFolders/${encodeURIComponent(id)}/childFolders`;
+  }
+  if (!id) throw new Error("Folder name is empty");
+  return id;
+}
+
 export async function listFolderMessages(
   folderName: string,
   top = 15,
   unreadOnly = false
 ): Promise<MailMessage[]> {
-  const folders = await graphFetch("/me/mailFolders", {
-    // OData escapes single quotes by doubling them. Folders like "Mike's stuff" otherwise 400.
-    $filter: `displayName eq '${folderName.replace(/'/g, "''")}'`,
-    $select: "id,displayName",
-  });
-
-  const folder = (folders.value || [])[0];
-  if (!folder) {
-    throw new Error(`Mail folder "${folderName}" not found`);
-  }
+  const folderId = await resolveFolderId(folderName);
 
   const params: Record<string, string> = {
     $top: String(top),
@@ -245,7 +255,7 @@ export async function listFolderMessages(
   }
 
   const data = await graphFetch(
-    `/me/mailFolders/${encodeURIComponent(folder.id)}/messages`,
+    `/me/mailFolders/${encodeURIComponent(folderId)}/messages`,
     params
   );
 
