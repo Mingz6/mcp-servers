@@ -49,7 +49,7 @@ server.tool(
         params.push(worker);
       }
       if (errorsOnly) {
-        sql += " AND status = 'error'";
+        sql += " AND status IN ('error', 'timeout')";
       }
       sql += " ORDER BY started_at DESC LIMIT ?";
       params.push(limit);
@@ -183,7 +183,7 @@ server.tool(
   "job_pipeline",
   "View job application verdict cache — what was applied to, skipped, and why. verdict_json contains the full decision.",
   {
-    status: z.string().optional().describe("Filter by verdict inside verdict_json (apply, skip, maybe). Omit for all."),
+    status: z.enum(["qualified", "rejected"]).optional().describe("Filter by the qualified flag inside verdict_json. Omit for all."),
     limit: z.number().min(1).max(100).default(30).describe("Max results."),
   },
   async ({ status, limit }) => {
@@ -193,9 +193,8 @@ server.tool(
       const params: unknown[] = [];
 
       if (status) {
-        // verdict_json is a JSON blob; extract the "verdict" field via json_extract
-        sql += ` AND json_extract(verdict_json, '$.verdict') = ?`;
-        params.push(status);
+        sql += ` AND json_extract(verdict_json, '$.qualified') = ?`;
+        params.push(status === "qualified" ? 1 : 0);
       }
       sql += " ORDER BY cached_at DESC LIMIT ?";
       params.push(limit);
