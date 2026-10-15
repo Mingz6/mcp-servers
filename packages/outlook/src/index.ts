@@ -197,11 +197,11 @@ server.tool(
 
 server.tool(
   "outlook_folder",
-  "List emails from a specific Outlook folder by name (e.g., 'Devops', 'Alerts', 'MSTeam', 'ItGroup').",
+  "List emails from an Outlook folder. Nested folders take a path. mingz6 folders: Inbox (people, government, codes, action items), GitHub/Action (review requests and @mentions), GitHub, Finance, Finance/e-Transfer, Bills, Orders, Travel, Events, Property Listings, Newsletters, Promotions, Archive.",
   {
     folder: z
       .string()
-      .describe("The folder name (case-sensitive, e.g., 'Devops', 'Alerts')"),
+      .describe("Folder name or path, e.g. 'Finance' or 'Finance/e-Transfer'"),
     count: z
       .number()
       .min(1)
