@@ -343,7 +343,7 @@ export function createMsGraphAuth(config: MsGraphAuthConfig): MsGraphAuth {
     const expiresAt = Date.now() + outcome.code.expiresIn * 1000;
     pendingAuth = new AuthPendingError(
       `AUTH_REQUIRED: Sign in to ${serviceName} to continue.\n` +
-        `1. Open ${outcome.code.verificationUri} (a browser tab was also opened automatically)\n` +
+        `1. Open ${outcome.code.verificationUri}${process.env[`${envPrefix}_NO_BROWSER`] === "1" ? "" : " (a browser tab was also opened automatically)"}\n` +
         `2. Enter code: ${outcome.code.userCode}\n` +
         `Expires in ~${Math.max(1, Math.round(outcome.code.expiresIn / 60))} min. ` +
         `Sign-in keeps working in the background — just retry this tool after you finish.`,
