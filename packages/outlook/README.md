@@ -15,6 +15,7 @@ Outlook email access via Microsoft Graph API. Read inbox, search, read messages,
 | `outlook_mark_read` | Mark a message as read or unread |
 | `outlook_send` | Start a new email thread (defaults to draft — pass `draft: false` to actually send) |
 | `outlook_reply` | Reply inside an existing thread, keeping subject, recipients and quoted history (draft by default) |
+| `outlook_delete_draft` | Move unsent drafts to Deleted Items (restorable there); refuses anything that isn't a draft |
 
 ## Setup
 

@@ -364,6 +364,41 @@ export async function replyToMessage(
   return { id: reply.id, webLink: reply.webLink };
 }
 
+export interface DraftDeleteResult {
+  id: string;
+  subject: string;
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Moves unsent drafts to Deleted Items, where Outlook can still restore them. Anything that isn't
+ * a draft is refused, so sent or received mail can't go through here. One at a time: parallel
+ * calls hit Graph's MailboxConcurrency 429.
+ */
+export async function deleteDrafts(messageIds: string[]): Promise<DraftDeleteResult[]> {
+  const results: DraftDeleteResult[] = [];
+  for (const id of messageIds) {
+    try {
+      const msg = await graphFetch(`/me/messages/${encodeURIComponent(id)}`, {
+        $select: "id,subject,isDraft",
+      });
+      const subject = msg.subject || "(no subject)";
+      if (msg.isDraft !== true) {
+        results.push({ id, subject, ok: false, error: "not a draft; only unsent drafts can be deleted" });
+        continue;
+      }
+      await graphPostJson(`/me/messages/${encodeURIComponent(id)}/move`, {
+        destinationId: "deleteditems",
+      });
+      results.push({ id, subject, ok: true });
+    } catch (err) {
+      results.push({ id, subject: "", ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return results;
+}
+
 function insertAfterBodyTag(html: string, fragment: string): string {
   const m = /<body[^>]*>/i.exec(html);
   if (!m) return fragment + html;
