@@ -4,7 +4,7 @@ import { mkdir, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { z } from "zod";
-import { createDraft, downloadAttachment, listAttachments, listFolderMessages, listInbox, listUnread, markAsRead, readMessage, replyToMessage, searchMail, sendMail } from "./graph.js";
+import { createDraft, deleteDrafts, downloadAttachment, listAttachments, listFolderMessages, listInbox, listUnread, markAsRead, readMessage, replyToMessage, searchMail, sendMail } from "./graph.js";
 
 const server = new McpServer({
   name: "outlook",
@@ -413,6 +413,36 @@ server.tool(
               : `Reply SENT in the thread${replyAll ? " (reply-all)" : ""}.`,
           },
         ],
+      };
+    } catch (err) {
+      return toolError(err);
+    }
+  }
+);
+
+server.tool(
+  "outlook_delete_draft",
+  "Delete unsent drafts from the personal Outlook account, e.g. ones a newer version replaced. Moves them to Deleted Items, where they can still be restored. Refuses any message that isn't a draft. Find draft IDs with outlook_folder 'Drafts' or outlook_search (drafts show From: Unknown).",
+  {
+    messageIds: z
+      .array(z.string().min(1))
+      .min(1)
+      .max(25)
+      .describe("IDs of the drafts to delete"),
+  },
+  async ({ messageIds }) => {
+    try {
+      const results = await deleteDrafts(messageIds);
+      const moved = results.filter((r) => r.ok);
+      const refused = results.filter((r) => !r.ok);
+      const lines = [
+        `Moved ${moved.length} of ${results.length} draft${results.length === 1 ? "" : "s"} to Deleted Items.`,
+        ...moved.map((r) => `- ${r.subject}\n  ID: ${r.id}`),
+        ...(refused.length ? ["Not deleted:", ...refused.map((r) => `- ${r.subject || "(unknown)"}: ${r.error}\n  ID: ${r.id}`)] : []),
+      ];
+      return {
+        content: [{ type: "text" as const, text: lines.join("\n") }],
+        ...(moved.length === 0 ? { isError: true as const } : {}),
       };
     } catch (err) {
       return toolError(err);
