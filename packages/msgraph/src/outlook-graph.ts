@@ -206,7 +206,11 @@ export async function readMessage(messageId: string): Promise<MailDetail> {
       (r: any) => r.emailAddress?.name || r.emailAddress?.address
     ),
     receivedAt: data.receivedDateTime,
-    body: stripHtml(data.body?.content || ""),
+    // A plain-text body is literal: stripping "tags" from it ate SQL like `<< ... <>`.
+    body:
+      data.body?.contentType?.toLowerCase() === "html"
+        ? stripHtml(data.body?.content || "")
+        : (data.body?.content || "").trim(),
     isRead: data.isRead,
     hasAttachments: data.hasAttachments,
     importance: data.importance,
