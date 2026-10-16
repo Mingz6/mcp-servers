@@ -384,53 +384,54 @@ export async function sendMessage(
   return data.id;
 }
 
-function markdownToHtml(md: string): string {
-  const lines = md.split("\n");
+// A blank line is <p>&nbsp;</p>, the way the Teams client writes one. A <br> between paragraphs
+// showed as two blank lines, and the body's final newline as an empty line under every message (2026-10-16).
+export function markdownToHtml(md: string): string {
   const html: string[] = [];
-  let inUl = false;
-  let inOl = false;
+  let list: "ul" | "ol" | null = null;
+  let gap = false;
 
-  for (let i = 0; i < lines.length; i++) {
-    let line = lines[i];
+  const closeList = () => {
+    if (list) html.push(`</${list}>`);
+    list = null;
+  };
 
-    // Inline formatting
-    line = line
+  for (const raw of md.replace(/\r\n?/g, "\n").split("\n")) {
+    if (!raw.trim()) {
+      closeList();
+      gap = html.length > 0;
+      continue;
+    }
+    if (gap) {
+      html.push("<p>&nbsp;</p>");
+      gap = false;
+    }
+
+    const line = escapeHtml(raw)
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
       .replace(/__(.+?)__/g, "<strong>$1</strong>")
       .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>")
       .replace(/`([^`]+)`/g, "<code>$1</code>")
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
 
-    // Unordered list item: - item or * item
-    const ulMatch = line.match(/^[\s]*[-*]\s+(.+)$/);
-    // Ordered list item: 1. item
-    const olMatch = line.match(/^[\s]*\d+\.\s+(.+)$/);
+    const ulMatch = line.match(/^\s*[-*]\s+(.+)$/);
+    const olMatch = line.match(/^\s*\d+\.\s+(.+)$/);
+    const tag = ulMatch ? "ul" : olMatch ? "ol" : null;
 
-    if (ulMatch) {
-      if (inOl) { html.push("</ol>"); inOl = false; }
-      if (!inUl) { html.push("<ul>"); inUl = true; }
-      html.push(`<li>${ulMatch[1]}</li>`);
-    } else if (olMatch) {
-      if (inUl) { html.push("</ul>"); inUl = false; }
-      if (!inOl) { html.push("<ol>"); inOl = true; }
-      html.push(`<li>${olMatch[1]}</li>`);
-    } else {
-      // Close any open lists
-      if (inUl) { html.push("</ul>"); inUl = false; }
-      if (inOl) { html.push("</ol>"); inOl = false; }
-
-      if (line.trim() === "") {
-        html.push("<br>");
-      } else {
-        html.push(`<p>${line}</p>`);
+    if (tag) {
+      if (list !== tag) {
+        closeList();
+        html.push(`<${tag}>`);
+        list = tag;
       }
+      html.push(`<li>${(ulMatch ?? olMatch)![1]}</li>`);
+    } else {
+      closeList();
+      html.push(`<p>${line}</p>`);
     }
   }
 
-  // Close any trailing lists
-  if (inUl) html.push("</ul>");
-  if (inOl) html.push("</ol>");
-
+  closeList();
   return html.join("");
 }
 
