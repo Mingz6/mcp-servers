@@ -616,7 +616,11 @@ function pickInstance<T extends { createdDateTime?: string | null }>(items: T[],
   return date ? dated.find((i) => edmontonDate(i.createdDateTime!) === date) : dated[0];
 }
 
-async function fetchTranscript(basePath: string, label: string, date?: string): Promise<{ id: string; text: string }> {
+async function fetchTranscript(
+  basePath: string,
+  label: string,
+  date?: string
+): Promise<{ id: string; text: string; createdDateTime?: string }> {
   let transcripts: any[];
   try {
     transcripts = (await graphFetch(`${basePath}/transcripts`)).value || [];
@@ -645,7 +649,7 @@ async function fetchTranscript(basePath: string, label: string, date?: string): 
   const text = (response.headers.get("content-type") || "").includes("vtt")
     ? cleanVtt(body)
     : body.split("\n").map((l) => l.trim()).filter((l) => l && !/^\d{2}:\d{2}:\d{2}/.test(l)).join("\n");
-  return { id: transcript.id, text };
+  return { id: transcript.id, text, createdDateTime: transcript.createdDateTime };
 }
 
 async function findOnlineMeeting(meetingName: string, meetingDate?: string): Promise<{ event: any; onlineMeetingId: string }> {
@@ -692,14 +696,15 @@ async function findOnlineMeeting(meetingName: string, meetingDate?: string): Pro
 
 export async function getMeetingTranscript(meetingName: string, meetingDate?: string): Promise<string> {
   const { event, onlineMeetingId } = await findOnlineMeeting(meetingName, meetingDate);
-  const { id, text } = await fetchTranscript(
+  const { id, text, createdDateTime } = await fetchTranscript(
     `/me/onlineMeetings/${encodeURIComponent(onlineMeetingId)}`,
     `"${event.subject}"`,
     meetingDate?.slice(0, 10)
   );
+  // A recurring series shares one transcript list, so without a date the newest transcript can be from an earlier instance than `event`.
   const header = [
     `Meeting: ${event.subject}`,
-    `Date: ${event.start?.dateTime || "unknown"}`,
+    `Date: ${createdDateTime ? new Date(createdDateTime).toLocaleString("en-CA", { timeZone: "America/Edmonton" }) : event.start?.dateTime || "unknown"}`,
     `Meeting link: ${event.onlineMeeting?.joinUrl || "n/a"}`,
     `Transcript ID: ${id}`,
     "---",
