@@ -513,6 +513,28 @@ def messages_recent(
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _cli(argv: list[str]) -> int:
+    """`cli.sh send --phone P [--service auto|sms|imessage]`, body on stdin: the sender
+    ~/code/brain/scripts/outbox.py calls once Ming presses Send now. Prints one JSON line."""
+    import argparse
+    import json
+    import sys
+
+    p = argparse.ArgumentParser(prog="cli.sh")
+    p.add_argument("cmd", choices=["send"])
+    p.add_argument("--phone", required=True)
+    p.add_argument("--service", choices=["auto", "sms", "imessage"], default="auto")
+    a = p.parse_args(argv)
+    result = messages_send(a.phone, sys.stdin.read(), a.service)
+    ok = result.startswith("Sent")
+    print(json.dumps({"ok": ok, "result": result}))
+    return 0 if ok else 1
+
+
 if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1:
+        sys.exit(_cli(sys.argv[1:]))
     logging.basicConfig(level=logging.INFO)
     mcp.run(transport="stdio")
