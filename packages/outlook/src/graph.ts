@@ -129,6 +129,11 @@ export interface MailDetail {
 
 // --- API Functions ---
 
+export async function whoAmI(): Promise<{ upn: string; name: string }> {
+  const me = await graphFetch("/me", { $select: "userPrincipalName,mail,displayName" });
+  return { upn: me.userPrincipalName ?? me.mail ?? "", name: me.displayName ?? "" };
+}
+
 export async function listInbox(
   top = 15,
   filter?: string
