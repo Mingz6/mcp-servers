@@ -1,4 +1,4 @@
-// Unattended sender for the personal mailbox, used by ~/code/brain/scripts/outbox.py when Ming presses
+// Unattended sender for the personal mailbox, used by ~/code/brain/outbox/outbox.py when Ming presses
 // Send now or a scheduled send comes due. Silent token only. The body comes on stdin; prints one JSON line.
 // Exit 0 sent, 3 sign-in needed, 1 anything else.
 //

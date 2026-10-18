@@ -515,7 +515,7 @@ def messages_recent(
 
 def _cli(argv: list[str]) -> int:
     """`cli.sh send --phone P [--service auto|sms|imessage]`, body on stdin: the sender
-    ~/code/brain/scripts/outbox.py calls once Ming presses Send now. Prints one JSON line."""
+    ~/code/brain/outbox/outbox.py calls once Ming presses Send now. Prints one JSON line."""
     import argparse
     import json
     import sys
