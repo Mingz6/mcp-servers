@@ -1,17 +1,19 @@
 // One-way copy of the work calendar (Graph /me/calendarView) into a local "CRNA" calendar in
 // macOS Calendar, for a Mac that can't add the Exchange account. launchd runs it every 15 min
-// through calendar-sync.sh. Copies subject, times, all-day and location only: no body, no
-// attendees. Each copy's notes hold a [crna:key:fingerprint] tag, which is how the next run
-// finds what changed. Silent token only: an expired sign-in logs one line and exits 0.
+// through calendar-sync.sh. Copies subject, times, all-day, location and the Teams join link
+// (into the URL field) only: no body, no attendees. Each copy's notes hold a [crna:key:fingerprint]
+// tag, which is how the next run finds what changed. Silent token only: an expired sign-in logs
+// one line and exits 0.
 //
-// It never creates the calendar: Calendar's "make new calendar" picks the store itself, and a
-// copy landing in iCloud would put work data on Apple's servers. Make it once by hand (On My Mac).
+// It never creates the calendar: Calendar's "make new calendar" picks the account itself, and a
+// copy in iCloud would show every meeting twice on an iPhone that has the CRNA account. Make it
+// once by hand (On My Mac).
 //
 //   calendar-sync.js            sync
 //   calendar-sync.js --dry-run  print what would change, touch nothing
 
-import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import type { CalendarSlot } from "./teams-graph.js";
 
@@ -28,7 +30,7 @@ const TAG = /\[crna:[0-9a-f]{16}:[0-9a-f]{10}\]/g;
 const sha1 = (s: string) => createHash("sha1").update(s).digest("hex");
 
 export function tagFor(slot: CalendarSlot): string {
-  const fingerprint = [slot.subject, slot.start, slot.end, slot.isAllDay, slot.location].join("\u0001");
+  const fingerprint = [slot.subject, slot.start, slot.end, slot.isAllDay, slot.location, slot.joinUrl].join("\u0001");
   return `[crna:${sha1(slot.id).slice(0, 16)}:${sha1(fingerprint).slice(0, 10)}]`;
 }
 
@@ -50,8 +52,8 @@ export function plan(remote: CalendarSlot[], localNotes: string): Plan {
   return { create, remove, unchanged: wanted.size - create.length };
 }
 
-export function asText(s: string): string {
-  const clean = s.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").slice(0, 400);
+export function asText(s: string, max = 400): string {
+  const clean = s.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").slice(0, max);
   return `"${clean.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
@@ -74,9 +76,11 @@ export function eventProps(slot: CalendarSlot): string {
     start = `my mk(${utcToLocalArgs(slot.start)})`;
     end = `my mk(${utcToLocalArgs(slot.end)})`;
   }
+  // A cut-off link would open the wrong meeting, so a link that doesn't fit is dropped.
+  const url = /^https:\/\/\S+$/.test(slot.joinUrl) && slot.joinUrl.length <= 2000 ? `, url:${asText(slot.joinUrl, 2000)}` : "";
   return (
     `{summary:${asText(slot.subject)}, start date:${start}, end date:${end}, ` +
-    `allday event:${slot.isAllDay}, location:${asText(slot.location)}, description:${asText(tagFor(slot))}}`
+    `allday event:${slot.isAllDay}, location:${asText(slot.location)}, description:${asText(tagFor(slot))}${url}}`
   );
 }
 

@@ -500,6 +500,7 @@ export interface CalendarSlot {
   end: string;
   isAllDay: boolean;
   location: string;
+  joinUrl: string; // Teams join link, "" when the meeting has none
 }
 
 // Every occurrence in the window that isn't cancelled, all pages. No Prefer header, so Graph
@@ -510,7 +511,7 @@ export async function listCalendarSlots(start: Date, end: Date): Promise<Calenda
     startDateTime: start.toISOString(),
     endDateTime: end.toISOString(),
     $top: "200",
-    $select: "id,subject,start,end,isAllDay,location,isCancelled",
+    $select: "id,subject,start,end,isAllDay,location,onlineMeeting,isCancelled",
   });
   for (;;) {
     for (const e of data.value ?? []) {
@@ -525,6 +526,7 @@ export async function listCalendarSlots(start: Date, end: Date): Promise<Calenda
         end: e.end.dateTime,
         isAllDay: Boolean(e.isAllDay),
         location: e.location?.displayName || "",
+        joinUrl: e.onlineMeeting?.joinUrl || "",
       });
     }
     const next = data["@odata.nextLink"];

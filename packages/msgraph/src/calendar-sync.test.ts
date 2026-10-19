@@ -10,13 +10,14 @@ const slot = (over: Partial<CalendarSlot> = {}): CalendarSlot => ({
   end: "2026-10-20T17:00:00.0000000",
   isAllDay: false,
   location: "Teams",
+  joinUrl: "https://teams.microsoft.com/meet/123?p=abc",
   ...over,
 });
 
 test("same event, same tag; any copied field changing changes the tag", () => {
   assert.equal(tagFor(slot()), tagFor(slot()));
   assert.match(tagFor(slot()), /^\[crna:[0-9a-f]{16}:[0-9a-f]{10}\]$/);
-  for (const change of [{ subject: "x" }, { start: "2026-10-20T16:30:00.0000000" }, { location: "" }, { isAllDay: true }]) {
+  for (const change of [{ subject: "x" }, { start: "2026-10-20T16:30:00.0000000" }, { location: "" }, { isAllDay: true }, { joinUrl: "" }]) {
     assert.notEqual(tagFor(slot(change)), tagFor(slot()));
     assert.equal(tagFor(slot(change)).slice(0, 23), tagFor(slot()).slice(0, 23), "key part follows the Graph id");
   }
@@ -52,6 +53,15 @@ test("timed events convert UTC to this Mac's local time; all-day events keep the
   const allDay = eventProps(slot({ isAllDay: true, start: "2026-11-11T00:00:00.0000000", end: "2026-11-13T00:00:00.0000000" }));
   assert.ok(allDay.includes("start date:my mk(2026, 11, 11, 0, 0), end date:(my mk(2026, 11, 11, 0, 0)) + 2 * days"));
   assert.ok(allDay.includes("allday event:true"));
+});
+
+test("the join link goes in the URL field only when it is a whole https link", () => {
+  assert.ok(eventProps(slot()).endsWith(', url:"https://teams.microsoft.com/meet/123?p=abc"}'));
+  const long = `https://teams.microsoft.com/l/meetup-join/${"a".repeat(600)}`;
+  assert.ok(eventProps(slot({ joinUrl: long })).includes(`url:"${long}"`), "longer than other fields' 400 cap");
+  for (const joinUrl of ["", "javascript:alert(1)", 'https://x" & (do shell script "id") & "', `https://${"a".repeat(2000)}`]) {
+    assert.ok(!eventProps(slot({ joinUrl })).includes("url:"), joinUrl.slice(0, 30));
+  }
 });
 
 test("the apply script deletes before it creates", () => {
