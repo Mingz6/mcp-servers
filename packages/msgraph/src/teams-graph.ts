@@ -493,6 +493,46 @@ export async function getCalendarEvents(
   return events;
 }
 
+export interface CalendarSlot {
+  id: string;
+  subject: string;
+  start: string; // UTC, "2026-10-20T15:30:00.0000000"; all-day events are midnight of the date
+  end: string;
+  isAllDay: boolean;
+  location: string;
+}
+
+// Every occurrence in the window that isn't cancelled, all pages. No Prefer header, so Graph
+// answers in UTC, and the nextLink pages (fetched without headers) stay in UTC too.
+export async function listCalendarSlots(start: Date, end: Date): Promise<CalendarSlot[]> {
+  const slots: CalendarSlot[] = [];
+  let data = await graphFetch("/me/calendarView", {
+    startDateTime: start.toISOString(),
+    endDateTime: end.toISOString(),
+    $top: "200",
+    $select: "id,subject,start,end,isAllDay,location,isCancelled",
+  });
+  for (;;) {
+    for (const e of data.value ?? []) {
+      if (e.isCancelled) continue;
+      if (e.start?.timeZone !== "UTC" || e.end?.timeZone !== "UTC") {
+        throw new Error(`calendarView returned ${e.start?.timeZone}, expected UTC`);
+      }
+      slots.push({
+        id: e.id,
+        subject: e.subject || "(no subject)",
+        start: e.start.dateTime,
+        end: e.end.dateTime,
+        isAllDay: Boolean(e.isAllDay),
+        location: e.location?.displayName || "",
+      });
+    }
+    const next = data["@odata.nextLink"];
+    if (!next) return slots;
+    data = await graphFetchUrl(next);
+  }
+}
+
 // --- Meeting Transcripts ---
 
 export interface MeetingSummary {
