@@ -1,5 +1,5 @@
 // One-way copy of the work calendar (Graph /me/calendarView) into a local "CRNA" calendar in
-// macOS Calendar, for a Mac that can't add the Exchange account. launchd runs it every 15 min
+// macOS Calendar, for a Mac that can't add the Exchange account. launchd runs it every hour
 // through calendar-sync.sh. Copies subject, times, all-day, location and the Teams join link
 // (into the URL field) only: no body, no attendees. Each copy's notes hold a [crna:key:fingerprint]
 // tag, which is how the next run finds what changed. Silent token only: an expired sign-in logs
