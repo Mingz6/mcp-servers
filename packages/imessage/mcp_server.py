@@ -230,6 +230,52 @@ def _send_applescript(phone: str, text: str, service: str) -> str:
     return f"Sent via {svc_type} to {normalized}"
 
 
+APPLE_EPOCH = 978307200
+IMESSAGE_CONFIRM_SECONDS = 30.0
+POLL_SECONDS = 1.0
+
+
+def _apple_ns(ts: float) -> int:
+    return int((ts - APPLE_EPOCH) * 1_000_000_000)
+
+
+def _outgoing_since(phone: str, since_ns: int) -> list[sqlite3.Row]:
+    conn = _get_db()
+    try:
+        chat_ids = _find_chat_ids(conn, phone)
+        if not chat_ids:
+            return []
+        placeholders = ",".join("?" * len(chat_ids))
+        return conn.execute(
+            f"""
+            SELECT m.service, m.error, m.is_sent, m.is_delivered
+            FROM chat_message_join j
+            JOIN message m ON m.rowid = j.message_id
+            WHERE j.chat_id IN ({placeholders}) AND m.is_from_me = 1 AND m.date >= ?
+            ORDER BY m.date
+            """,
+            [*chat_ids, since_ns],
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def _imessage_outcome(phone: str, since_ns: int) -> str:
+    """'sent', 'failed' (Apple refused the number: error 22, is_sent 0) or 'pending'."""
+    deadline = time.monotonic() + IMESSAGE_CONFIRM_SECONDS
+    while True:
+        for row in _outgoing_since(phone, since_ns):
+            if row["service"] != "iMessage":
+                continue
+            if row["error"]:
+                return "failed"
+            if row["is_sent"] or row["is_delivered"]:
+                return "sent"
+        if time.monotonic() >= deadline:
+            return "pending"
+        time.sleep(POLL_SECONDS)
+
+
 # ---------------------------------------------------------------------------
 # MCP Tools
 # ---------------------------------------------------------------------------
@@ -388,15 +434,16 @@ def messages_send(
     Args:
         phone: Phone number (any format: 604-555-0123, +16045550123, etc.)
         text: Message text to send
-        service: 'auto' (detect from history), 'imessage', or 'sms'
+        service: 'auto' (from history; an iMessage Apple refuses is resent once as SMS),
+            'imessage', or 'sms'
     """
     if not text.strip():
         return "Cannot send empty message."
     if not phone.strip():
         return "Phone number required."
 
-    # Auto-detect service from conversation history
-    if service == "auto":
+    auto = service == "auto"
+    if auto:
         try:
             conn = _get_db()
             service = _detect_service(conn, phone)
@@ -405,7 +452,28 @@ def messages_send(
             service = "iMessage"
 
     svc = "SMS" if service.lower() == "sms" else "iMessage"
-    return _send_applescript(phone, text.strip(), svc)
+    text = text.strip()
+    since_ns = _apple_ns(time.time() - 1)
+    result = _send_applescript(phone, text, svc)
+    if svc == "SMS":
+        return result
+
+    if result.startswith("Sent"):
+        outcome = _imessage_outcome(phone, since_ns)
+        if outcome == "sent":
+            return result
+        if outcome == "pending":
+            return f"{result} (not confirmed after {IMESSAGE_CONFIRM_SECONDS:.0f}s)"
+        if not auto:
+            return f"FAILED (iMessage): Apple refused {_normalize_phone(phone)}, not on iMessage. Try service='sms'."
+    elif not auto:
+        return result
+
+    # Some iPhones resend a failed iMessage as text on their own; don't send it twice.
+    if any(r["service"] in ("SMS", "RCS") for r in _outgoing_since(phone, since_ns)):
+        return f"Sent via SMS to {_normalize_phone(phone)} (iMessage failed; the iPhone sent it as text)"
+    sms = _send_applescript(phone, text, "SMS")
+    return f"{sms} (iMessage not available)" if sms.startswith("Sent") else sms
 
 
 @mcp.tool()

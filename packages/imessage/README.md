@@ -8,7 +8,7 @@ Read and send iMessage/SMS via macOS Messages.app.
 |---|---|
 | `messages_read` | Read recent messages with a contact by phone number |
 | `messages_search` | Search messages by keyword, optionally filtered to one contact |
-| `messages_send` | Send iMessage or SMS (auto-detects service from history) |
+| `messages_send` | Send iMessage or SMS. `auto` follows the contact's last incoming message; an iMessage Apple refuses (error 22) is resent once as SMS |
 | `messages_contacts` | List recent conversations with last message preview |
 
 ## Setup
