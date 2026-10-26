@@ -155,7 +155,10 @@ def _find_chat_ids(conn: sqlite3.Connection, phone: str) -> list[int]:
 
 
 def _detect_service(conn: sqlite3.Connection, phone: str) -> str:
-    """Check existing conversation history to determine iMessage vs SMS."""
+    """Pick iMessage vs SMS from the contact's latest incoming message, then our latest outgoing.
+
+    chat.service_name lies on macOS 26+: an all-iMessage thread can be labelled RCS.
+    """
     chat_ids = _find_chat_ids(conn, phone)
     if not chat_ids:
         return "iMessage"  # default for new conversations
@@ -163,18 +166,28 @@ def _detect_service(conn: sqlite3.Connection, phone: str) -> str:
     placeholders = ",".join("?" * len(chat_ids))
     row = conn.execute(
         f"""
-        SELECT c.service_name
-        FROM chat c
-        WHERE c.rowid IN ({placeholders})
-        ORDER BY c.rowid DESC LIMIT 1
+        SELECT m.service
+        FROM chat_message_join j
+        JOIN message m ON m.rowid = j.message_id
+        WHERE j.chat_id IN ({placeholders}) AND m.service IS NOT NULL
+        ORDER BY m.is_from_me ASC, m.date DESC LIMIT 1
         """,
         chat_ids,
     ).fetchone()
+    if row is None:
+        row = conn.execute(
+            f"""
+            SELECT c.service_name AS service
+            FROM chat c
+            WHERE c.rowid IN ({placeholders})
+            ORDER BY c.rowid DESC LIMIT 1
+            """,
+            chat_ids,
+        ).fetchone()
 
-    if row and row["service_name"]:
-        svc = row["service_name"].lower()
-        if "sms" in svc or "rcs" in svc:
-            return "SMS"
+    svc = (row["service"] or "").lower() if row else ""
+    if "sms" in svc or "rcs" in svc:
+        return "SMS"
     return "iMessage"
 
 
