@@ -21,7 +21,7 @@ Outlook email access via Microsoft Graph API. Read inbox, search, read messages,
 
 ### 1. Azure AD App Registration
 
-Uses the same app registration as `teams-chat`: `<your-app-client-id>`.
+Uses the same app registration as `teams-chat`; put its client ID in `OUTLOOK_MCP_CLIENT_ID`.
 
 Add these **delegated** Microsoft Graph permissions:
 
@@ -32,7 +32,7 @@ Add these **delegated** Microsoft Graph permissions:
 Steps:
 
 1. Go to [Azure Portal → App Registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade)
-2. Open app `<your-app-client-id>`
+2. Open the app registration
 3. **API permissions** → Add a permission → Microsoft Graph → Delegated → add the three above
 4. Click **Grant admin consent** (if your tenant requires it)
 
