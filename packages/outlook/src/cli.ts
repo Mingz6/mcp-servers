@@ -2,9 +2,11 @@
 // Send now or a scheduled send comes due. Silent token only. The body comes on stdin; prints one JSON line.
 // Exit 0 sent, 3 sign-in needed, 1 anything else.
 //
-//   cli.js mail --to A [--to B] [--cc C] --subject S
-//   cli.js reply --message-id ID [--sender-only]
+//   cli.js mail --to A [--to B] [--cc C] --subject S [--attach FILE ...]
+//   cli.js reply --message-id ID [--sender-only] [--attach FILE ...]
 //   cli.js whoami
+
+import { readAttachments } from "./attachments.js";
 
 process.env.OUTLOOK_MCP_SILENT_ONLY = "1";
 
@@ -50,12 +52,14 @@ async function main(): Promise<void> {
     case "mail": {
       const to = opts.to ?? out({ ok: false, error: "--to is required" }, 1);
       const subject = need("subject");
-      await graph.sendMail(to, subject, await readBody(), opts.cc);
+      const files = readAttachments(opts.attach ?? []);
+      await graph.sendMail(to, subject, await readBody(), opts.cc, undefined, files);
       out({ ok: true }, 0);
     }
     case "reply": {
       const messageId = need("message-id");
-      const sent = await graph.replyToMessage(messageId, await readBody(), !flags.has("sender-only"), false);
+      const files = readAttachments(opts.attach ?? []);
+      const sent = await graph.replyToMessage(messageId, await readBody(), !flags.has("sender-only"), false, files);
       out({ ok: true, id: sent.id }, 0);
     }
     case "whoami":

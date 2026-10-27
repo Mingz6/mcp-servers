@@ -1,3 +1,4 @@
+import type { FileAttachment } from "./attachments.js";
 import { getAccessToken } from "./auth.js";
 
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
@@ -277,13 +278,29 @@ export async function listFolderMessages(
   }));
 }
 
+async function attachAll(messageId: string, files: FileAttachment[]): Promise<void> {
+  for (const file of files) {
+    await graphPost(`/me/messages/${encodeURIComponent(messageId)}/attachments`, {
+      "@odata.type": "#microsoft.graph.fileAttachment",
+      ...file,
+    });
+  }
+}
+
 export async function sendMail(
   to: string[],
   subject: string,
   body: string,
   cc?: string[],
-  bcc?: string[]
+  bcc?: string[],
+  attachments: FileAttachment[] = []
 ): Promise<void> {
+  if (attachments.length) {
+    const draft = await createDraft(to, subject, body, cc, bcc);
+    await attachAll(draft.id, attachments);
+    await graphPostEmpty(`/me/messages/${encodeURIComponent(draft.id)}/send`);
+    return;
+  }
   const toRecipients = to.map((addr) => ({
     emailAddress: { address: addr },
   }));
@@ -348,7 +365,8 @@ export async function replyToMessage(
   messageId: string,
   body: string,
   replyAll = true,
-  draft = true
+  draft = true,
+  attachments: FileAttachment[] = []
 ): Promise<{ id: string; webLink: string }> {
   const action = replyAll ? "createReplyAll" : "createReply";
   const reply = await graphPostJson<{ id: string; webLink: string; body: { contentType: string; content: string } }>(
@@ -363,6 +381,7 @@ export async function replyToMessage(
   await graphPatch(`/me/messages/${encodeURIComponent(reply.id)}`, {
     body: { contentType: reply.body?.contentType ?? "html", content },
   });
+  await attachAll(reply.id, attachments);
   if (!draft) {
     await graphPostEmpty(`/me/messages/${encodeURIComponent(reply.id)}/send`);
   }
