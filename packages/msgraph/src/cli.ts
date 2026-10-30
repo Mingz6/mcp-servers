@@ -2,7 +2,7 @@
 // server, but silent token only: nobody is at the keyboard at 07:00. The body comes on stdin.
 // Prints one JSON line. Exit 0 sent, 3 sign-in needed, 1 anything else.
 //
-//   cli.js teams --chat ID [--format markdown|html]
+//   cli.js teams --chat ID [--format markdown|html] [--reply-to MESSAGE_ID]
 //   cli.js mail --to A [--to B] [--cc C] --subject S
 //   cli.js reply (--internet-message-id ID | --message-id ID) [--sender-only] [--draft]
 //   cli.js mail-info --message-id ID
@@ -61,7 +61,7 @@ async function main(): Promise<void> {
       const chat = need("chat");
       const body = await readStdin();
       if (!body.trim()) out({ ok: false, error: "empty body" }, 1);
-      out({ ok: true, id: await teams.sendMessage(chat, body, format) }, 0);
+      out({ ok: true, id: await teams.sendMessage(chat, body, format, one("reply-to")) }, 0);
     }
     case "mail": {
       const to = opts.to ?? out({ ok: false, error: "--to is required" }, 1);

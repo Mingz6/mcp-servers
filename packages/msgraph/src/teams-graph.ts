@@ -352,10 +352,23 @@ async function chatMembers(chatId: string): Promise<ChatMember[]> {
   }));
 }
 
+/** A plain post, or with replyTo the client's Reply: the original shows quoted above the new message. */
+export function sendRequest(
+  chatId: string,
+  payload: Record<string, unknown>,
+  replyTo?: string
+): { path: string; body: Record<string, unknown> } {
+  const messages = `/chats/${encodeURIComponent(chatId)}/messages`;
+  return replyTo
+    ? { path: `${messages}/replyWithQuote`, body: { messageIds: [replyTo], replyMessage: payload } }
+    : { path: messages, body: payload };
+}
+
 export async function sendMessage(
   chatId: string,
   content: string,
-  format: "text" | "html" | "markdown" = "markdown"
+  format: "text" | "html" | "markdown" = "markdown",
+  replyTo?: string
 ): Promise<string> {
   let body: { contentType: string; content: string };
 
@@ -379,7 +392,8 @@ export async function sendMessage(
     payload.mentions = applied.mentions;
   }
 
-  const response = await graphPost(`/chats/${encodeURIComponent(chatId)}/messages`, payload);
+  const request = sendRequest(chatId, payload, replyTo);
+  const response = await graphPost(request.path, request.body);
   const data = await response.json();
   return data.id;
 }

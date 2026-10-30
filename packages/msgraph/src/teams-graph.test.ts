@@ -1,6 +1,6 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applyMentions, markdownToHtml } from "./teams-graph.js";
+import { test } from "node:test";
+import { applyMentions, markdownToHtml, sendRequest } from "./teams-graph.js";
 
 test("a blank line between paragraphs is one Teams spacer paragraph, not a <br>", () => {
   assert.equal(markdownToHtml("one\n\ntwo"), "<p>one</p><p>&nbsp;</p><p>two</p>");
@@ -31,4 +31,16 @@ test("@[Name] survives the conversion and becomes a mention", () => {
   const { content, mentions } = applyMentions(html, [{ id: "u1", displayName: "Jane Doe" }]);
   assert.equal(content, '<p><at id="0">Jane Doe</at> two things.</p>');
   assert.equal(mentions.length, 1);
+});
+
+test("no reply-to is a plain post; a reply-to quotes that message the way the client's Reply does", () => {
+  const payload = { body: { contentType: "html", content: "<p>hi</p>" } };
+  assert.deepEqual(sendRequest("19:a@thread.v2", payload), {
+    path: "/chats/19%3Aa%40thread.v2/messages",
+    body: payload,
+  });
+  assert.deepEqual(sendRequest("19:a@thread.v2", payload, "1761762492000"), {
+    path: "/chats/19%3Aa%40thread.v2/messages/replyWithQuote",
+    body: { messageIds: ["1761762492000"], replyMessage: payload },
+  });
 });
