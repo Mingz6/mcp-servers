@@ -3,8 +3,7 @@
 #   ./install_launchd.sh                 build the launcher app, install the snapshot agent (every 15 min)
 #   ./install_launchd.sh --auto-read     also install the twice-a-day auto-read agent (needs a non-empty allowlist)
 #   ./install_launchd.sh --uninstall     boot out and remove both agents and the launcher app
-# Env: PYTHON (default /usr/bin/python3, stdlib only), HOUR_1 / HOUR_2 (auto-read hours, default 10 and 20),
-#      PREFIX (agents label prefix, default dev.mingz.wechat-ocr).
+# Env: PYTHON (default /usr/bin/python3, stdlib only), HOUR_1 / HOUR_2 (auto-read hours, default 10 and 20).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -64,7 +63,7 @@ PLIST
 codesign --force --sign - "$APP"   # ad-hoc: the grant is tied to this build, so a rebuild asks again
 
 # 2. Agents.
-fill() {  # template label out
+fill() {  # template-file label out-file
   sed -e "s|{{LAUNCHER}}|$APP/Contents/MacOS/WeChatOCR|g" -e "s|{{LOG}}|$LOG|g" \
       -e "s|{{HOUR_1}}|$HOUR_1|g" -e "s|{{HOUR_2}}|$HOUR_2|g" "$1" > "$3"
   plutil -lint "$3" >/dev/null
