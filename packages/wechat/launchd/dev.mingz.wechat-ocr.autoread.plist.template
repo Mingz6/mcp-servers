@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.mingz.wechat-ocr.autoread</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{LAUNCHER}}</string>
+    <string>auto-read</string>
+  </array>
+  <!-- Twice a day. Opens ONLY the chats in ~/.wechat-export/ocr/allowlist.txt, and only after 120 s without
+       keyboard or mouse input. A run that finds the Mac busy skips quietly until the next slot. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>{{HOUR_1}}</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>{{HOUR_2}}</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>{{LOG}}</string>
+  <key>StandardErrorPath</key>
+  <string>{{LOG}}</string>
+</dict>
+</plist>

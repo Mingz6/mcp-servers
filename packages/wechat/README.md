@@ -12,6 +12,7 @@ and run a **read-only** MCP server for live chat queries.
 | `mcp_server.py` | MCP server — live chat queries, contact search, voice transcription (read-only) |
 | `wechat_ocr.py` + `wxvision.swift` | Reads WeChat from the screen with Apple Vision OCR. No keys, no re-sign. The working path on WeChat 4.1.15 |
 | `test_wechat_ocr.py` | Unit tests for the OCR parsers (synthetic lines): `python3 -m unittest test_wechat_ocr -v` |
+| `wechat_scheduled.py`, `install_launchd.sh`, `launchd/` | Scheduled capture through launchd (see "Running it on a schedule"). Tests: `python3 -m unittest test_wechat_scheduled -v` |
 
 ## Reading WeChat by screenshot + OCR (works on 4.1.15, no keys)
 
@@ -88,6 +89,34 @@ python3 wechat_ocr.py --json     # same, as JSON
 - Parser rules worth knowing: text starting right of x=420 pt is an outgoing bubble (`me`); in a 1:1 chat
   (title without a `(N)` member count) text left of x=321 pt is image content and is ignored; the window
   is usually 2x Retina, so all layout constants are in points and scaled by `ocr_width / window_width`.
+
+
+### Running it on a schedule (launchd)
+
+`wechat_scheduled.py snapshot` is one capture that never clicks, so it never marks a chat as read.
+`wechat_scheduled.py auto-read` opens only the chats named in `~/.wechat-export/ocr/allowlist.txt` (one name
+per line, `#` for comments) and only after 120 s without keyboard or mouse input; an empty list reads nothing.
+Both print one log line and exit 0 when there is nothing to do: WeChat not running, no window (closed to the
+menu bar), login screen, locked screen, Mac busy, previous run still going. They exit 1 only for a real
+failure. Logs hold counts and reasons, never chat names or text.
+
+```bash
+./install_launchd.sh                # launcher app + snapshot every 15 min
+./install_launchd.sh --auto-read    # also the allowlist auto-read at 10:00 and 20:00 (HOUR_1, HOUR_2)
+./install_launchd.sh --uninstall    # boot out both agents, remove the app and the plists
+```
+
+- **Why a small app:** macOS ties Screen Recording and Accessibility to a program. The installer builds
+  `~/Applications/WeChatOCR.app` (a Swift launcher with the python and script paths compiled in, two
+  accepted modes) and the agents run that, so the grant covers one app and not every `python3`. It starts
+  Python as a child process; an `exec` would hand the grant check back to `python3`.
+- **Grants (by hand):** System Settings, Privacy & Security, Screen Recording, add `WeChatOCR`; add
+  Accessibility too for auto-read. The app is ad-hoc signed, so a rebuild (re-running the installer) asks again.
+- **Log:** `~/.wechat-export/ocr/launchd.log`. Test now: `launchctl kickstart -k gui/$(id -u)/dev.mingz.wechat-ocr.snapshot`.
+- **Side effects:** snapshot marks nothing read. Auto-read marks the allowlisted chats read on the phone.
+  Never put `--top N` on a schedule: it opens whatever is on top, including groups you have not read.
+- Needs the Mac logged in (a LaunchAgent has no screen at the login window) and WeChat's window open; with
+  the lid closed, or WeChat closed to the menu bar, runs skip.
 
 ## When to Run
 
