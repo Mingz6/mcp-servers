@@ -2,7 +2,9 @@
 # Install or remove the scheduled WeChat capture (LaunchAgents, no sudo).
 #   ./install_launchd.sh                 build the launcher app, install the snapshot agent (every 15 min)
 #   ./install_launchd.sh --auto-read     also install the twice-a-day auto-read agent (needs a non-empty allowlist)
-#   ./install_launchd.sh --uninstall     boot out and remove both agents and the launcher app
+#   ./install_launchd.sh --container     WechatOnCloud host: the container snapshot agent only (every 15 min), no
+#                                        launcher app and no grant (it reads the container's display over docker exec)
+#   ./install_launchd.sh --uninstall     boot out and remove all three agents and the launcher app
 # Env: PYTHON (default /usr/bin/python3, stdlib only), HOUR_1 / HOUR_2 (auto-read hours, default 10 and 20).
 set -euo pipefail
 
@@ -16,6 +18,7 @@ DATA="$HOME/.wechat-export/ocr"
 LOG="$DATA/launchd.log"
 UID_="$(id -u)"
 LABELS=(dev.mingz.wechat-ocr.snapshot dev.mingz.wechat-ocr.autoread)
+CONTAINER=dev.mingz.wechat-ocr.container
 
 boot_out() {
   for l in "${LABELS[@]}"; do
@@ -25,9 +28,24 @@ boot_out() {
 
 if [[ "${1:-}" == "--uninstall" ]]; then
   boot_out
-  for l in "${LABELS[@]}"; do rm -f "$AGENTS/$l.plist"; done
+  launchctl bootout "gui/$UID_/$CONTAINER" 2>/dev/null || true
+  for l in "${LABELS[@]}" "$CONTAINER"; do rm -f "$AGENTS/$l.plist"; done
   rm -rf "$APP"
-  echo "removed both agents and $APP. Remove WeChatOCR from Screen Recording and Accessibility in System Settings by hand."
+  echo "removed the agents and $APP. Remove WeChatOCR from Screen Recording and Accessibility in System Settings by hand."
+  exit 0
+fi
+
+if [[ "${1:-}" == "--container" ]]; then
+  [[ -x "$PY" ]] || { echo "ERROR: $PY not found" >&2; exit 1; }
+  mkdir -p "$DATA" "$AGENTS" && chmod 700 "$DATA"
+  launchctl bootout "gui/$UID_/$CONTAINER" 2>/dev/null || true
+  OUT="$AGENTS/$CONTAINER.plist"
+  sed -e "s|{{PYTHON}}|$PY|g" -e "s|{{SCRIPT}}|$HERE/container_snapshot.py|g" -e "s|{{LOG}}|$LOG|g" \
+      "$HERE/launchd/$CONTAINER.plist.template" > "$OUT"
+  plutil -lint "$OUT" >/dev/null
+  launchctl bootstrap "gui/$UID_" "$OUT"
+  echo "Installed $CONTAINER. Log: $LOG"
+  echo "Test: launchctl kickstart -k gui/$UID_/$CONTAINER; tail -3 $LOG"
   exit 0
 fi
 

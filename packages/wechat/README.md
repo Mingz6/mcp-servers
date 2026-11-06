@@ -13,6 +13,7 @@ and run a **read-only** MCP server for live chat queries.
 | `wechat_ocr.py` + `wxvision.swift` | Reads WeChat from the screen with Apple Vision OCR. No keys, no re-sign. The working path on WeChat 4.1.15 |
 | `test_wechat_ocr.py` | Unit tests for the OCR parsers (synthetic lines): `python3 -m unittest test_wechat_ocr -v` |
 | `wechat_scheduled.py`, `install_launchd.sh`, `launchd/` | Scheduled capture through launchd (see "Running it on a schedule"). Tests: `python3 -m unittest test_wechat_scheduled -v` |
+| `container_snapshot.py` | The same OCR reader for WeChat for Linux in a [WechatOnCloud](https://github.com/Gloridust/WechatOnCloud) container (see "WeChat in a container"). Tests: `python3 -m unittest test_container_snapshot -v` |
 
 ## Reading WeChat by screenshot + OCR (works on 4.1.15, no keys)
 
@@ -117,6 +118,34 @@ failure. Logs hold counts and reasons, never chat names or text.
   Never put `--top N` on a schedule: it opens whatever is on top, including groups you have not read.
 - Needs the Mac logged in (a LaunchAgent has no screen at the login window) and WeChat's window open; with
   the lid closed, or WeChat closed to the menu bar, runs skip.
+
+### WeChat in a container (WechatOnCloud)
+
+WechatOnCloud runs the official WeChat for Linux on an Xvnc display inside Docker, with a web panel to log in.
+Its database is encrypted the same way (a key scan inside the container found 0 keys on 2026-11-06), so this
+reads the container's screen instead, on the Mac that runs Docker (it needs Apple Vision):
+
+```bash
+python3 container_snapshot.py snapshot --print           # one capture of the container, never clicks
+python3 container_snapshot.py read --chats "A,B" --print # open these chats and read back --days (default 2)
+python3 container_snapshot.py read                       # the chats in ~/.wechat-export/ocr/allowlist.txt
+./install_launchd.sh --container                         # snapshot every 15 min (label dev.mingz.wechat-ocr.container)
+```
+
+- Capture is `docker exec <instance> xwd -root`, decoded to PNG in Python (the image's ffmpeg 5.1 can't read
+  xwd from a pipe). The instance is `--instance`, `$WECHAT_CONTAINER`, or the one running `wechat-on-cloud`
+  container. No Screen Recording or Accessibility grant: nothing on the Mac's own screen is touched.
+- The Linux client is laid out differently (list 60-300 px, pane from 300, title bar 33-80, input box 142 px
+  high) and shows stamps in Chinese ("昨天21:31"). Every OCR box is mapped onto the Mac layout and every stamp
+  into the Mac's English form ("Yesterday 21:31") before `wechat_ocr`'s parser runs, so the store, the
+  transcripts and the merge are shared with the Mac path. The display is 1x, so every OCR pass runs at 2x.
+- `read` clicks and scrolls with xdotool on the container's own display, so there is no idle gate; someone
+  moving the pointer in the web panel still stops it. It marks the opened chats read on the phone, like
+  `--auto-read`. Never put `--top N` on a schedule.
+- Skips (exit 0, one log line): no container running, no WeChat window, logged out (the login window is
+  showing: scan the QR code in the panel), a blank window, previous run still going, empty allowlist.
+- Not yet seen on Linux: group chats (sender labels are assumed at the bubble edge, x~371), unread badges, a
+  chat longer than one screen (the wheel step is an estimate; the merge measures the real shift).
 
 ## When to Run
 
