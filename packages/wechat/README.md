@@ -143,7 +143,7 @@ python3 container_snapshot.py read                       # the chats in ~/.wecha
   moving the pointer in the web panel still stops it. It marks the opened chats read on the phone, like
   `--auto-read`. Never put `--top N` on a schedule.
 - Skips (exit 0, one log line): no container running, no WeChat window, logged out (the login window is
-  showing: scan the QR code in the panel), a blank window, previous run still going, empty allowlist.
+  showing: log in again from the panel; a host reboot does this too), a blank window, previous run still going, empty allowlist.
 - Seen live (2026-11-06): a new message shows in the next capture; an unread badge is found but not its number
   (Vision can't read the white digit on red), so `unread` is 1 for any count, as on the Mac when the preview has
   no `[N]`; an emoji-only message has no text to read and is left out; the xdotool wheel scrolls the pane.

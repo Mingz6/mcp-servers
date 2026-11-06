@@ -255,7 +255,7 @@ def find_window(box: Box) -> dict:
         raise Skip("No WeChat window in the container (WeChat not started, or closed to the tray)")
     win = max(wins, key=lambda g: g["w"] * g["h"])
     if win["w"] < MIN_W or win["h"] < MIN_H:
-        raise Skip("WeChat in the container is logged out or on its login window: scan the QR code in the panel")
+        raise Skip("WeChat in the container is logged out or on its login window: log in again from the panel")
     return win
 
 
