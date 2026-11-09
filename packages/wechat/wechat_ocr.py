@@ -741,6 +741,10 @@ def _public(m: dict) -> dict:
     return {k: m[k] for k in ("t", "side", "sender", "text")}
 
 
+def _stamped(msgs: list[dict]) -> int:
+    return sum(1 for m in msgs if m["t"])
+
+
 def _fill_stamps(msgs: list[dict]) -> None:
     """A message at the top of a screen has no time stamp in view; take the one before it."""
     last = ""
@@ -921,6 +925,8 @@ class AutoReader:
             off, rows = now_off, now_snap.get("rows")
             moved = d != 0 if d is not None else now_fp is not None and now_fp != fp  # the pane did scroll
             fp = now_fp
+            if len(merged) == len(acc) and _stamped(merged) > _stamped(acc):
+                acc = merged  # nothing new to read, but the scroll revealed a time stamp the top messages lacked
             if len(merged) == len(acc):
                 if moved:  # an image or card filled the screen: nothing new to read, so reach further
                     blank += 1
