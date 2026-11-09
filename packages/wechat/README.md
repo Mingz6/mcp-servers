@@ -36,11 +36,13 @@ python3 wechat_ocr.py --json     # same, as JSON
 - `wechat_screen_snapshot` and `--stitch` never click, so they never mark a chat as read. A background click
   (`postToPid`) on the chat list was tried on 2026-10-11 and WeChat ignored it; real input is only used by
   `--auto-read` below, which needs a quiet Mac.
-- Limits: OCR is approximate. Group names are cut by WeChat itself, emoji are lost, stickers and photos show
-  as `[non-text message]`, text printed on a sticker, cover or screenshot shows as `[image] <text>`, and each
+- Limits: OCR is approximate. Group names are cut by WeChat itself, emoji are lost, a sticker or photo from
+  a named sender (group chats) shows as `[non-text message]`, text printed on a sticker, cover or screenshot shows as `[image] <text>`, and each
   chat shows only its last preview unless it is the open chat. To get a
   chat's recent messages, leave that chat open in WeChat before the capture. History only covers moments a
   capture ran (every MCP call and every `/life` scan).
+  An emoji-only or image-only bubble in a 1:1 chat gives Vision no text and no sender label, so there is
+  nothing to mark it with and it is missing from the transcript. A fix would need the bubble found from pixels.
 - Several days of one chat: open it in WeChat, then run `python3 wechat_ocr.py --stitch 90 --chat <name>` and
   scroll up slowly (about half a screen every 2 s). It captures every ~2 s, merges overlapping screens into
   one transcript and saves it under `chats/`. Scrolling faster than one screen per capture leaves a gap
