@@ -709,6 +709,33 @@ class AutoReadTests(DataDirCase):
         blind = self.run_read(FakeDesk(chat), days=3)["chats"][0]  # text alone loses its place in the stickers
         self.assertFalse(blind["stopped"].startswith("reached"), blind["stopped"])
 
+    def test_a_time_stamp_only_a_scroll_reveals_is_kept_when_no_new_message_came_with_it(self):
+        class Short(FakeDesk):  # 4 messages, a pane 39 px too short: the first scroll shows the stamp above them
+            scrolled = False
+
+            def scroll(self, x, y, dy):
+                self.scrolled = True
+                super().scroll(x, y, dy)
+
+            def snap(self):
+                s = super().snap()
+                shift = 39 if self.scrolled else 0
+                msgs = [dict(m, y=w.BODY_TOP + 100 * i + 10 + shift, y2=w.BODY_TOP + 100 * i + 70 + shift)
+                        for i, m in enumerate(self.chat)]
+                for m in msgs[:2]:
+                    m["t"] = "Yesterday 21:31" if self.scrolled else ""
+                s["open_chat"]["messages"] = msgs
+                return {**s, "rows": screen_rows(500 - shift, height=1131), "scale": 1.0}
+
+        chat = _long_chat(4)
+        for m in chat:
+            m["t"] = ""
+        desk = Short(chat)
+        desk.pos = 0
+        mom = self.run_read(desk, days=3)["chats"][0]
+        self.assertEqual([m["text"] for m in mom["messages"]], [c["text"] for c in chat])
+        self.assertTrue(all(m["t"] for m in mom["messages"][:2]), [m["t"] for m in mom["messages"]])
+
 
 def stamped(text, t, sender="Mom", side="in"):
     return {"t": t, "side": side, "sender": sender if side == "in" else ("me" if side == "out" else ""), "text": text}
