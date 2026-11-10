@@ -6,7 +6,7 @@ See `.github/copilot-instructions.md` for full stack and conventions.
 
 ## Quick reference
 
-- Language: TypeScript (ES2022), Node.js runtime
+- Languages: TypeScript (ES2022, strict) and Python; Node.js 22+
 - Each package has its own `package.json`/`tsconfig.json`, plus a `run.sh` wrapper — mcp.json calls the wrapper, not the binary directly
 - See brain repo's `copilot/instructions/mcp-server-design.instructions.md` for tool-boundary design rules
 - No hardcoded personal data (account IDs, paths, credentials) in tracked files
