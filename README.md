@@ -1,127 +1,132 @@
 # mcp-servers
 
-All MCP servers in one place — custom and third-party. VS Code's `mcp.json` points here for everything.
+[![CI](https://github.com/Mingz6/mcp-servers/actions/workflows/ci.yml/badge.svg)](https://github.com/Mingz6/mcp-servers/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## Server Registry
+MCP (Model Context Protocol) servers that give AI coding agents, GitHub Copilot in VS Code and Claude Code, the same inboxes and tools I use every day: Teams, Outlook, iMessage, WhatsApp, WeChat, Telegram, Discord, LinkedIn, Xiaohongshu, IMAP mail, a Markdown knowledge wiki and a job runner.
 
-| Server | Type | What it does | Why I need it |
-|--------|------|-------------|---------------|
-| [teams-chat](packages/teams-chat/) | Custom (Node) | Read/send Teams messages, extract PR links | Standup, PR review requests, colleague replies |
-| [outlook](packages/outlook/) | Custom (Node) | Read/send Outlook mail, search, mark read, attachments | Email triage during standup, PO reply detection |
-| [imessage](packages/imessage/) | Custom (Python) | Read iMessage/SMS via Messages.app, send via AppleScript | Tenant/family chats |
-| [brain-mcp](packages/brain-mcp/) | Custom (Node) | Search/read/link/update `~/code/brain` Markdown wiki | Agent-readable knowledge layer for Copilot and Claude Code |
-| [discord-user](packages/discord-user/) | Custom (Node) | Read Discord servers/DMs via personal user token (read-only) | See community channels the bot can't access |
-| [wechat](packages/wechat/) | Custom (Python) | Query WeChat chats, search messages, voice transcription (read-only) | Family/personal chat access from Copilot |
-| [flywheel](packages/flywheel/) | Custom (Node) | Track reference repos, check updates, scout for new patterns | Daily self-improvement loop — knowledge aggregator for `/flywheel` skill |
-| [linkedin](packages/linkedin/) | Custom (Python) | Read/send LinkedIn messages, search people, view profiles | Professional networking from Copilot |
-| [ms-loop](packages/ms-loop/) | Custom (Node) | CRUD Microsoft Loop pages via Graph API | Read/write Loop docs without switching apps |
-| [telegram](packages/telegram/) | Custom (Python) | Read/send Telegram messages, search chats, list contacts | Personal/group chat access via Telethon |
-| [whatsapp](packages/whatsapp/) | Custom (Node/JS) | Read/send WhatsApp messages, search chats, list contacts | Family/group chats via Baileys WebSocket |
-| [worker-center-mcp](packages/worker-center-mcp/) | Custom (Node) | Query worker-center status, price history, job pipeline | Agent access to scheduled task dashboard |
-| awesome-copilot | Third-party (Docker) | Microsoft MCP .NET sample — copilot instructions search | Load custom copilot instructions dynamically |
-| context7 | Third-party (npx) | Fetch up-to-date library docs from Upstash | Get current API docs instead of outdated training data |
+![npm run demo: brain-mcp answers a search and a backlinks query over stdio](docs/demo.gif)
 
-## Structure
+*`npm run demo` starts brain-mcp against the made-up wiki in [`examples/sample-brain/`](examples/sample-brain/) and calls two of its tools, the way an agent would. No accounts or API keys.*
 
-```
-mcp-servers/
-├── packages/
-│   ├── brain-mcp/         # Custom — local brain Markdown wiki API
-│   ├── discord-user/      # Custom — Discord via personal user token
-│   ├── flywheel/          # Custom — reference repo tracker
-│   ├── imessage/          # Custom (Python) — iMessage/SMS via macOS
-│   ├── linkedin/          # Custom (Python) — LinkedIn via browser automation
-│   ├── ms-loop/           # Custom — Microsoft Loop via Graph API
-│   ├── outlook/           # Custom — Outlook via Graph API
-│   ├── teams-chat/        # Custom — MS Teams via Graph API
-│   ├── telegram/          # Custom (Python) — Telegram via Telethon
-│   ├── wechat/            # Custom (Python) — WeChat via SQLCipher
-│   ├── whatsapp/          # Custom (Node/JS) — WhatsApp via Baileys
-│   └── worker-center-mcp/ # Custom — worker-center dashboard API
-├── scripts/
-│   └── npx-nvm.sh         # Wrapper: loads nvm before running npx
-└── README.md
-```
+Write-up: [mingz.dev/projects/mcp-servers](https://mingz.dev/projects/mcp-servers/)
 
-## Quick Start
+## Why it exists
+
+I run most of my day through agent chats: a morning scan of every channel, replies drafted in my voice, PR review asks, a task board. An agent is only as useful as what it can read. For the channels I actually use, servers either didn't exist (WeChat, iMessage with an SMS fallback, Xiaohongshu) or wanted broad tokens and sent messages on their own. These are small, run locally over stdio, and keep a person in front of anything that goes out.
+
+## Quick start
+
+Needs Node 22 or newer (CI runs 22 and 24). This part needs no accounts:
 
 ```bash
-npm install        # installs Node workspaces (all *.ts packages)
-npm run build      # builds all Node servers
+git clone https://github.com/Mingz6/mcp-servers.git && cd mcp-servers
+npm ci
+npm run build   # every Node server, TypeScript strict
+npm test        # brain-mcp, msgraph and outlook unit tests
+npm run demo    # brain-mcp on examples/sample-brain, two tool calls over stdio
 ```
 
-For Python servers (wechat, imessage, linkedin, telegram):
+Python servers keep their own virtualenv:
+
 ```bash
-cd packages/wechat   # or imessage, linkedin, telegram
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+cd packages/imessage    # or linkedin, telegram, wechat, xiaohongshu
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python -m unittest test_mcp_server
 ```
 
-## VS Code Config
+Then register the servers you want with your client. Each one starts through its `run.sh`, which finds nvm's Node or the package's `.venv`:
 
-All servers are registered in your VS Code `mcp.json` (user or workspace level).
-Each custom server uses a `run.sh` wrapper — no hardcoded Python/Node paths:
+```bash
+claude mcp add brain -e BRAIN_MCP_ROOT=$HOME/notes -- $PWD/packages/brain-mcp/run.sh
+```
 
 ```jsonc
+// VS Code mcp.json
 {
-    "servers": {
-        "teams-chat": {
-            "type": "stdio",
-            "command": "${userHome}/code/personal/mcp-servers/packages/teams-chat/run.sh",
-            "env": {
-                "TEAMS_MCP_CLIENT_ID": "your-client-id",
-                "TEAMS_MCP_TENANT_ID": "your-tenant-id"
-            }
-        },
-        "wechat": {
-            "type": "stdio",
-            "command": "${userHome}/code/personal/mcp-servers/packages/wechat/run.sh"
-        },
-        "brain": {
-            "type": "stdio",
-            "command": "${userHome}/code/personal/mcp-servers/packages/brain-mcp/run.sh",
-            "env": {
-                "BRAIN_MCP_ROOT": "${userHome}/code/brain"
-            }
-        }
+  "servers": {
+    "brain": {
+      "type": "stdio",
+      "command": "${userHome}/code/mcp-servers/packages/brain-mcp/run.sh",
+      "env": { "BRAIN_MCP_ROOT": "${userHome}/notes" }
     }
+  }
 }
 ```
 
-The wrappers handle runtime discovery (nvm for Node, .venv for Python) so upgrading
-Node/Python versions won't break your MCP config.
+Logins are per server and covered in each package's README: a device code for Microsoft, a QR scan for WhatsApp and Xiaohongshu, phone and OTP for Telegram, a one-time headed browser login for LinkedIn.
 
-## Adding a New Server
+## Servers
 
-### Custom server
-1. Create `packages/{name}/` with its own `package.json` (Node) or `requirements.txt` (Python)
-2. Add a README.md in the package folder
-3. Add to the registry table above
-4. Add entry to VS Code's `mcp.json`
+| Server | Language | Talks to | What an agent can do | Status |
+|---|---|---|---|---|
+| [msgraph](packages/msgraph/) | TypeScript | Microsoft Graph, work account | Teams chats, meetings and transcripts; Outlook mail with attachments; Loop pages; a one-way calendar copy to the Mac | daily use |
+| [outlook](packages/outlook/) | TypeScript | Microsoft Graph, personal Outlook.com | read, search and send mail, attachments | daily use |
+| [imap-mail](packages/imap-mail/) | TypeScript | IMAP (Gmail, QQ Mail, ...) | read, search, attachments; one instance per account | daily use |
+| [imessage](packages/imessage/) | Python | macOS Messages (`chat.db` + AppleScript) | read, search, send; resends as SMS when Apple refuses an iMessage | daily use |
+| [whatsapp](packages/whatsapp/) | JavaScript | WhatsApp Web via Baileys | read, search, send | daily use |
+| [wechat](packages/wechat/) | Python | WeChat for Mac (SQLCipher database or screen OCR) | read, search, voice-note transcripts; read-only | daily use |
+| [telegram](packages/telegram/) | Python | Telegram user API via Telethon | read, search, send | daily use |
+| [discord-user](packages/discord-user/) | TypeScript | Discord, as the user | read servers and DMs; read-only, never sends | daily use |
+| [linkedin](packages/linkedin/) | Python | linkedin.com via Patchright | inbox, send, people search, profiles, posts | daily use |
+| [xiaohongshu](packages/xiaohongshu/) | Python | xiaohongshu.com via a headless browser | search, feed, post detail, comments | daily use |
+| [brain-mcp](packages/brain-mcp/) | TypeScript | A local Markdown wiki | keyword and semantic search, backlinks, link graph, guarded edits | daily use |
+| [flywheel](packages/flywheel/) | TypeScript | GitHub repos I learn from | track repos, detect changes, scout new patterns | daily use |
+| [worker-center-mcp](packages/worker-center-mcp/) | TypeScript | worker-center's SQLite database | worker status, price history, job pipeline | daily use |
+| [teams-chat](packages/teams-chat/) | TypeScript | Microsoft Graph | Teams only; msgraph covers it for agents | legacy, still feeds a scheduled scan |
+| [ms-loop](packages/ms-loop/) | TypeScript | Microsoft Graph | Loop only; msgraph covers it | legacy |
+| [msgraph-auth](packages/msgraph-auth/) | TypeScript | MSAL | shared device-code login, token cache, cross-process sign-in lock | library |
 
-### Third-party server
-1. Add entry to VS Code's `mcp.json` (use `scripts/npx-nvm.sh` for npx-based servers)
-2. Add to the registry table above with upgrade notes
+Third-party servers (context7, Azure DevOps) run through [`scripts/npx-nvm.sh`](scripts/npx-nvm.sh), which loads nvm's Node before `npx`.
 
-## Upgrading
+## Architecture
 
-| Server | How to upgrade |
-|--------|---------------|
-| teams-chat | `cd packages/teams-chat && npm update && npm run build` |
-| outlook | `cd packages/outlook && npm update && npm run build` |
-| brain-mcp | `cd packages/brain-mcp && npm update && npm run build` |
-| wechat | `cd packages/wechat && .venv/bin/pip install --upgrade "mcp[cli]"` |
-| awesome-copilot | Update the Docker image SHA in `mcp.json` |
-| context7 | Automatic — `npx -y @upstash/context7-mcp` always pulls latest |
+```mermaid
+flowchart LR
+  copilot["VS Code Copilot"] -- stdio --> wrapper
+  claude["Claude Code"] -- stdio --> wrapper
+  wrapper["run.sh per server<br/>nvm Node or .venv Python"] --> graphServers & chatServers & webServers & localServers
+
+  subgraph packages
+    graphServers["msgraph, outlook"]
+    chatServers["imessage, whatsapp, telegram,<br/>wechat, discord-user, imap-mail"]
+    webServers["linkedin, xiaohongshu"]
+    localServers["brain-mcp, flywheel,<br/>worker-center-mcp"]
+  end
+
+  graphServers --> auth["msgraph-auth<br/>MSAL device code + token cache"] --> graph[("Microsoft Graph")]
+  chatServers --> chats[("chat.db, SQLCipher DB,<br/>Baileys, Telethon, Discord, IMAP")]
+  webServers --> browser[("persistent browser profile")]
+  localServers --> files[("Markdown wiki, SQLite")]
+```
+
+## Decisions and trade-offs
+
+- **One repo, one package per server.** One lockfile and one build, but each server starts on its own, so an expired WeChat key never takes Teams down. The cost: `npm ci` installs everything (about 150 MB) even if you want one server.
+- **Local stdio only.** No HTTP listener, so there is no port to secure; the client spawns the server with the environment it needs. The cost: everything runs on one machine, and a second machine runs its own copies.
+- **`run.sh` wrappers.** Clients start servers with a minimal environment (no shell profile), so the wrapper finds nvm's Node or the package's `.venv` and, where a server needs them, loads its secrets. Upgrading Node doesn't break the client config.
+- **Read-only where the platform's terms are grey.** Discord (a user token) and WeChat never send. The send tools that do exist expect a person to approve first; in my setup a pre-tool hook blocks a direct send and stages the message in an outbox for review.
+- **One Microsoft login for three surfaces.** msgraph merged teams-chat, the work half of outlook, and ms-loop because they shared one app registration. msgraph-auth adds a cross-process lock so two clients starting at once don't both pop a device-code prompt.
+- **Browser automation only where there is no API.** LinkedIn and Xiaohongshu drive a persistent browser profile. It is slow and breaks when the site changes, so those servers stay small.
+- **No secrets in the repo.** `.env` files are gitignored, and GitHub secret scanning with push protection is on.
+
+## Status
+
+Built for my own Macs and used every day. imessage and wechat need macOS; the rest run anywhere Node or Python does. Nothing is published to npm or PyPI: clone the repo and point your client at the `run.sh` you want. CI builds and tests every Node package on Node 22 and 24 and runs the Python unit tests on every push and pull request.
+
+## Adding a server
+
+1. Create `packages/{name}/` with its own `package.json` (Node) or `requirements.txt` (Python), a `run.sh` and a README.
+2. Add it to the table above.
+3. Register its `run.sh` with your client.
 
 ## Troubleshooting
 
-**Server won't start in VS Code?**
-- Check `mcp.json` paths are correct (use `${userHome}` not `~`)
-- Run the `run.sh` manually to test: `./packages/teams-chat/run.sh`
-- For Python servers: check `.venv` exists — the wrapper will tell you how to create it
-- For npx servers: run `scripts/npx-nvm.sh -y <package>` manually to test
+- **A server won't start:** run its wrapper by hand (`./packages/brain-mcp/run.sh`); it says what's missing, such as a `.venv` or an env var.
+- **VS Code paths:** use `${userHome}` in `mcp.json`, not `~`.
+- **npx-based servers:** try `scripts/npx-nvm.sh -y <package>` by hand.
+- **WeChat:** re-extract the database key with `sudo python3 packages/wechat/extract_key.py` after a WeChat update.
 
-**Auth issues?**
-- Teams/Outlook: run the auth-test script in the package → `npm run auth-test`
-- WeChat: re-extract keys → `sudo python3 packages/wechat/extract_key.py`
+## License
+
+[MIT](LICENSE)

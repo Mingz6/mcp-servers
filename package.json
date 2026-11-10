@@ -2,12 +2,14 @@
   "name": "mcp-servers",
   "version": "1.0.0",
   "private": true,
-  "description": "Personal MCP servers monorepo",
+  "description": "MCP servers for AI coding agents: chat, mail and work tools over stdio",
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
     "build": "npm run build -w packages/msgraph-auth && npm run build --workspaces --if-present",
+    "test": "npm test --workspaces --if-present",
+    "demo": "node scripts/demo.mjs",
     "build:brain-mcp": "npm run build -w packages/brain-mcp",
     "build:msgraph-auth": "npm run build -w packages/msgraph-auth",
     "build:msgraph": "npm run build -w packages/msgraph-auth && npm run build -w packages/msgraph",
