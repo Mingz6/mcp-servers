@@ -1,7 +1,7 @@
 {
   "name": "mcp-msgraph",
   "version": "1.0.0",
-  "description": "Unified Microsoft Graph MCP server for the CRNA identity — merges teams-chat, outlook, and ms-loop tool surfaces into one process/token cache (see packages/teams-chat, packages/outlook, packages/ms-loop for the still-separately-running standalone originals; outlook also backs the separate outlook-mingz6 personal identity)",
+  "description": "Unified Microsoft Graph MCP server for a work Microsoft 365 account: Teams, Outlook and Loop tools in one process and one token cache (the standalone teams-chat and ms-loop packages still exist; outlook also backs a separate personal account)",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {

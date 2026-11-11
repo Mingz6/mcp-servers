@@ -3,7 +3,7 @@ export { AuthPendingError } from "mcp-msgraph-auth";
 
 // Unified auth for the merged msgraph server (teams_* + outlook_* + loop_* tools in one
 // process). Union of the scopes teams-chat, outlook, and ms-loop each requested separately —
-// safe to request as one token set since all three use the SAME CRNA app registration/tenant
+// safe to request as one token set since all three use the same app registration and tenant
 // and already shared one on-disk token cache even as 3 separate processes (see
 // /memories/mcp-loop-auth.md). envPrefix "MSGRAPH_MCP" is new; mcp.json must set
 // MSGRAPH_MCP_CLIENT_ID / MSGRAPH_MCP_TENANT_ID (same values as the old TEAMS_MCP_*/
