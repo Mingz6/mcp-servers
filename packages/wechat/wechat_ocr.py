@@ -976,6 +976,7 @@ def auto_read(desk, names: list[str] | None = None, top: int = 5, days: int = 3,
         return out
     home, front = (state["x"], state["y"]), desk.front()
     reader = AutoReader(desk, chat_snap, days, max_steps, per_chat_secs)
+    reader.placed = home
     try:
         if front != WECHAT_BUNDLE:
             desk.activate(WECHAT_BUNDLE)
@@ -1003,8 +1004,11 @@ def auto_read(desk, names: list[str] | None = None, top: int = 5, days: int = 3,
                     row = again[0]
                 win = desk.window()
                 row_at = (win["x"] + (LIST_LEFT + LIST_RIGHT) / 2, win["y"] + row["y"])
-                reader.click(*row_at)
-                time.sleep(1.2)
+                open_title = _norm(first["open_chat"]["title"])
+                already_open = idx == 0 and attempt == 0 and bool(open_title) and open_title == _norm(row["chat"])
+                if not already_open:
+                    reader.click(*row_at)
+                    time.sleep(1.2)
                 res = reader.read_open_chat(row["chat"], desk.window(), row_at, expect)
                 if attempt == 0 and res["stopped"].startswith("opened '") and not res["messages"]:
                     continue  # a row moved between the screenshot and the click: look again and retry once

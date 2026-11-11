@@ -530,7 +530,7 @@ class AutoReadTests(DataDirCase):
         all_texts = [c["text"] for c in chat]
         texts = [m["text"] for m in mom["messages"]]
         self.assertEqual(texts, all_texts[all_texts.index(texts[0]):])  # contiguous, in order, up to the newest
-        self.assertEqual(desk.clicks[0][1], 38 + 135)  # the Mom row, File Transfer skipped
+        self.assertEqual(desk.clicks, [])
         self.assertEqual(desk.pos, len(chat) - 6)  # chat left at its newest message
         self.assertEqual(desk.moves, [(0.0, 0.0)])  # pointer put back
         self.assertEqual(desk.activations[-1], "com.microsoft.VSCode")
@@ -575,7 +575,7 @@ class AutoReadTests(DataDirCase):
         self.assertTrue(res["chats"][0]["stopped"].startswith("reached 3 days"), res["chats"][0]["stopped"])
         self.assertEqual(desk.pos, len(chat) - 6)
 
-    def test_a_click_that_closes_the_open_chat_is_repeated(self):
+    def test_an_already_open_chat_is_read_without_clicking_its_row(self):
         class Toggle(FakeDesk):  # the row was already open: the first click closes it, the second opens it
             def __init__(self, chat):
                 super().__init__(chat)
@@ -593,8 +593,32 @@ class AutoReadTests(DataDirCase):
 
         desk = Toggle(_long_chat())
         res = self.run_read(desk, days=3)
-        self.assertEqual((len(desk.clicks), res["chats"][0]["title"]), (2, "Mom"))
+        self.assertEqual((len(desk.clicks), res["chats"][0]["title"]), (0, "Mom"))
         self.assertTrue(res["chats"][0]["stopped"].startswith("reached"), res["chats"][0]["stopped"])
+
+    def test_a_similar_open_chat_still_requires_a_click(self):
+        class Similar(FakeDesk):
+            def snap(self):
+                result = super().snap()
+                if not self.clicks:
+                    result["open_chat"]["title"] = "MomWork"
+                return result
+
+        desk = Similar(_long_chat())
+        result = self.run_read(desk, names=["Mom"], days=3)
+        self.assertEqual((len(desk.clicks), result["chats"][0]["title"]), (1, "Mom"))
+
+    def test_symbol_only_titles_do_not_skip_the_target_click(self):
+        class Symbols(FakeDesk):
+            def snap(self):
+                result = super().snap()
+                if not self.clicks:
+                    result["open_chat"]["title"] = "&"
+                return result
+
+        desk = Symbols(_long_chat(), list_name="*")
+        result = self.run_read(desk, days=3)
+        self.assertEqual((len(desk.clicks), result["chats"][0]["title"]), (1, "Mom"))
 
     def test_a_click_that_opened_another_chat_is_not_read(self):
         class Shifted(FakeDesk):  # the list reordered, so the click opened a different chat
@@ -616,7 +640,7 @@ class AutoReadTests(DataDirCase):
 
             def snap(self):
                 s = super().snap()
-                s["open_chat"]["title"] = getattr(self, "opened", "Mom")
+                s["open_chat"]["title"] = getattr(self, "opened", "Dad")
                 return s
 
         desk = MovedOnce(_long_chat())
@@ -650,6 +674,22 @@ class AutoReadTests(DataDirCase):
         desk = FakeDesk(_long_chat(), key_idle=1)
         res = self.run_read(desk)
         self.assertEqual(res["stopped"], "you came back")
+        self.assertEqual((desk.clicks, desk.moves), ([], []))
+
+    def test_stops_before_reading_an_open_chat_when_the_pointer_moves(self):
+        class MovedPointer(FakeDesk):
+            state_calls = 0
+
+            def state(self):
+                self.state_calls += 1
+                result = super().state()
+                if self.state_calls > 1:
+                    result["x"] += 10
+                return result
+
+        desk = MovedPointer(_long_chat())
+        result = self.run_read(desk)
+        self.assertEqual((result["stopped"], result["chats"]), ("you came back", []))
         self.assertEqual((desk.clicks, desk.moves), ([], []))
 
     def test_screen_lock_blocks_everything(self):
