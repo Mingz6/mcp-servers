@@ -83,21 +83,23 @@ Third-party servers (context7, Azure DevOps) run through [`scripts/npx-nvm.sh`](
 
 ```mermaid
 flowchart LR
-  copilot["VS Code Copilot"] -- stdio --> wrapper
-  claude["Claude Code"] -- stdio --> wrapper
-  wrapper["run.sh per server<br/>nvm Node or .venv Python"] --> graphServers & chatServers & webServers & localServers
+  subgraph clients["Agent clients"]
+    copilot["VS Code Copilot"]
+    claude["Claude Code"]
+  end
 
-  subgraph packages
+  subgraph servers["packages/, one process each"]
     graphServers["msgraph, outlook"]
     chatServers["imessage, whatsapp, telegram,<br/>wechat, discord-user, imap-mail"]
     webServers["linkedin, xiaohongshu"]
     localServers["brain-mcp, flywheel,<br/>worker-center-mcp"]
   end
 
-  graphServers --> auth["msgraph-auth<br/>MSAL device code + token cache"] --> graph[("Microsoft Graph")]
-  chatServers --> chats[("chat.db, SQLCipher DB,<br/>Baileys, Telethon, Discord, IMAP")]
-  webServers --> browser[("persistent browser profile")]
-  localServers --> files[("Markdown wiki, SQLite")]
+  clients -- "stdio, started through run.sh" --> servers
+  graphServers --> msalAuth["msgraph-auth<br/>MSAL device code + token cache"] --> graphApi[("Microsoft Graph")]
+  chatServers --> chatStores[("chat.db, SQLCipher DB,<br/>Baileys, Telethon, Discord, IMAP")]
+  webServers --> browserProfile[("persistent browser profile")]
+  localServers --> localFiles[("Markdown wiki, SQLite")]
 ```
 
 ## Decisions and trade-offs
