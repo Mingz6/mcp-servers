@@ -212,16 +212,17 @@ class WeChat:
         """Load and cache contacts. Returns {wxid: {nickname, remark}}."""
         if self._contacts is not None:
             return self._contacts
-        self._contacts = {}
+        contacts = {}
         rows = self._query("contact/contact.db", "SELECT * FROM contact;")
         for c in rows:
             wxid = c.get("username", "")
             if wxid:
-                self._contacts[wxid] = {
+                contacts[wxid] = {
                     "nickname": c.get("nick_name", ""),
                     "remark": c.get("remark", ""),
                     "alias": c.get("alias", ""),
                 }
+        self._contacts = contacts
         logger.info(f"Loaded {len(self._contacts)} contacts")
         return self._contacts
 
@@ -233,8 +234,8 @@ class WeChat:
         """
         if self._name2id is not None:
             return self._name2id, self._id2name
-        self._name2id = {}
-        self._id2name = {}
+        name2id = {}
+        id2name = {}
         if self.keys.get("message/message_0.db"):
             rows = self._query(
                 "message/message_0.db",
@@ -244,13 +245,15 @@ class WeChat:
                 un = r.get("user_name", "")
                 if un:
                     table = f"Msg_{hashlib.md5(un.encode()).hexdigest()}"
-                    self._name2id[table] = un
-                    self._id2name[un] = table
-        if not self._name2id:
+                    name2id[table] = un
+                    id2name[un] = table
+        if not name2id:
             for wxid in self.load_contacts().keys():
                 table = f"Msg_{hashlib.md5(wxid.encode()).hexdigest()}"
-                self._name2id[table] = wxid
-                self._id2name[wxid] = table
+                name2id[table] = wxid
+                id2name[wxid] = table
+        self._name2id = name2id
+        self._id2name = id2name
         logger.info(f"Name2Id: {len(self._name2id)} mappings")
         return self._name2id, self._id2name
 
@@ -812,7 +815,7 @@ def wechat_search_messages(query: str, limit: int = 20) -> str:
         ][:limit]
         hits += [
             line for t in wechat_ocr.saved_chats() for line in t.splitlines()[3:] if q in line.lower()
-        ][:limit]
+        ][:max(0, limit - len(hits))]
         return KEYLESS_NOTE + ("\n".join(hits) or f"No screen-captured text matching '{query}'")
     if not results:
         return f"No messages found matching '{query}'"
