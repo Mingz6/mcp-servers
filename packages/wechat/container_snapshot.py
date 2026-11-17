@@ -165,27 +165,32 @@ def _crop(x: float, y: float, cw: float, ch: float, W: int, H: int) -> str:
 
 
 def xwd_to_png(data: bytes, crop: tuple[int, int, int, int] | None = None) -> bytes:
-    """Decode a 32-bit TrueColor ZPixmap XWD (what `xwd -root` writes on Xvnc) into an RGB PNG, optionally
+    """Decode a TrueColor ZPixmap XWD (what `xwd -root` writes on Xvnc) into an RGB PNG, optionally
     cropped to (x, y, w, h). Standard library only, so launchd needs no ffmpeg or ImageMagick."""
     if len(data) < 100:
         raise w.OcrError("xwd: short read from the container")
     (hsize, _ver, fmt, _depth, width, height, _xoff, byte_order, _unit, _bit_order, _pad, bpp, bpl,
      _vclass, rmask, gmask, bmask, _bits, _entries, ncolors) = struct.unpack(">20I", data[:80])
-    if fmt != 2 or bpp != 32 or (rmask, gmask, bmask) != (0xFF0000, 0xFF00, 0xFF):
+    if fmt != 2 or bpp not in (24, 32) or (rmask, gmask, bmask) != (0xFF0000, 0xFF00, 0xFF):
         raise w.OcrError(f"xwd: unsupported pixmap (format {fmt}, {bpp} bpp, masks {rmask:x}/{gmask:x}/{bmask:x})")
+    # Pixel size comes from bpp and the row stride from bytes_per_line: a container the panel re-creates
+    # packs 3-byte pixels into rows zero-padded to 4 x width.
+    size = bpp // 8
+    if bpl < width * size:
+        raise w.OcrError(f"xwd: unsupported pixmap ({bpl} bytes per line for {width} x {bpp} bpp)")
     start = hsize + ncolors * 12
     if len(data) < start + bpl * height:
         raise w.OcrError("xwd: truncated image")
     x0, y0, cw, ch = crop or (0, 0, width, height)
     x0, y0 = max(0, min(x0, width - 1)), max(0, min(y0, height - 1))
     cw, ch = max(1, min(cw, width - x0)), max(1, min(ch, height - y0))
-    # A pixel is 0x00RRGGBB: stored B,G,R,X least significant byte first, X,R,G,B otherwise.
-    ri, gi, bi = (2, 1, 0) if byte_order == 0 else (1, 2, 3)
+    # A pixel is 0x00RRGGBB: stored B,G,R(,X) least significant byte first, (X,)R,G,B otherwise.
+    ri, gi, bi = (2, 1, 0) if byte_order == 0 else (size - 3, size - 2, size - 1)
     raw = bytearray()
     for y in range(y0, y0 + ch):
-        row = data[start + y * bpl + x0 * 4:start + y * bpl + (x0 + cw) * 4]
+        row = data[start + y * bpl + x0 * size:start + y * bpl + (x0 + cw) * size]
         px = bytearray(cw * 3)
-        px[0::3], px[1::3], px[2::3] = row[ri::4], row[gi::4], row[bi::4]
+        px[0::3], px[1::3], px[2::3] = row[ri::size], row[gi::size], row[bi::size]
         raw += b"\x00" + px
 
     def chunk(tag: bytes, body: bytes) -> bytes:

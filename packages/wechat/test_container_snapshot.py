@@ -67,14 +67,17 @@ def fake_ocr(helper, png, *args):
     return {"w": W, "h": H, "paper": [250, 250, 250], "lines": FULL, "reds": [], "rows": list(range(1, H + 1))}
 
 
-def xwd(pixels, width, height, byte_order=0, bpp=32, ncolors=256):
-    """A minimal XWD file: header, window name, colormap, ZPixmap of 0x00RRGGBB pixels."""
+def xwd(pixels, width, height, byte_order=0, bpp=32, ncolors=256, bpl=None):
+    """A minimal XWD file: header, window name, colormap, ZPixmap of 0x00RRGGBB pixels in bpp/8 bytes,
+    each row zero-padded to bpl."""
     name = b"xwdump\x00"
     hsize = 100 + len(name)
-    bpl = width * 4
+    size = max(bpp // 8, 1)
+    bpl = bpl or width * size
     head = struct.pack(">25I", hsize, 7, 2, 24, width, height, 0, byte_order, 32, byte_order, 32, bpp, bpl,
                        4, 0xFF0000, 0xFF00, 0xFF, 8, ncolors, ncolors, width, height, 0, 0, 0)
-    body = b"".join(struct.pack("<I" if byte_order == 0 else ">I", p) for p in pixels)
+    px = [struct.pack("<I", p)[:size] if byte_order == 0 else struct.pack(">I", p)[4 - size:] for p in pixels]
+    body = b"".join(b"".join(px[y * width:(y + 1) * width]).ljust(bpl, b"\x00") for y in range(height))
     return head + name + b"\x00" * (12 * ncolors) + body
 
 
@@ -192,6 +195,18 @@ class XwdTests(unittest.TestCase):
             self.assertEqual((width, height), (3, 2))
             self.assertEqual(rows[0][0], (0x11, 0x22, 0x33))
             self.assertEqual(rows[1][2], (0x01, 0x02, 0x03))
+
+    def test_decode_24_bpp_rows(self):
+        # A container the panel re-creates writes 3-byte pixels in rows padded to 4 x width
+        for bpl in (12, 9):
+            for order in (0, 1):
+                data = xwd(self.PIX, 3, 2, byte_order=order, bpp=24, bpl=bpl)
+                width, height, rows = png_pixels(c.xwd_to_png(data))
+                self.assertEqual((width, height), (3, 2), (bpl, order))
+                self.assertEqual(rows[0], [(0x11, 0x22, 0x33), (0x44, 0x55, 0x66), (0x77, 0x88, 0x99)], (bpl, order))
+                self.assertEqual(rows[1][2], (0x01, 0x02, 0x03), (bpl, order))
+        _, _, rows = png_pixels(c.xwd_to_png(xwd(self.PIX, 3, 2, bpp=24, bpl=12), crop=(1, 1, 2, 1)))
+        self.assertEqual(rows[0], [(0xDD, 0xEE, 0xFF), (0x01, 0x02, 0x03)])
 
     def test_crop_to_the_window(self):
         width, height, rows = png_pixels(c.xwd_to_png(xwd(self.PIX, 3, 2), crop=(1, 1, 2, 1)))
