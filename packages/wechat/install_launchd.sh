@@ -5,7 +5,9 @@
 #   ./install_launchd.sh --container     WechatOnCloud host: the container snapshot agent only (every 15 min), no
 #                                        launcher app and no grant (it reads the container's display over docker exec)
 #   ./install_launchd.sh --uninstall     boot out and remove all three agents and the launcher app
-# Env: PYTHON (default /usr/bin/python3, stdlib only), HOUR_1 / HOUR_2 (auto-read hours, default 10 and 20).
+# Env: PYTHON (default /usr/bin/python3, stdlib only), HOUR_1 / HOUR_2 (auto-read hours, default 10 and 20),
+#      WECHAT_CONTAINER (--container: the instance to read when the host runs more than one; a reinstall
+#      keeps the one already in the plist, WECHAT_CONTAINER= clears it).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -38,13 +40,21 @@ fi
 if [[ "${1:-}" == "--container" ]]; then
   [[ -x "$PY" ]] || { echo "ERROR: $PY not found" >&2; exit 1; }
   mkdir -p "$DATA" "$AGENTS" && chmod 700 "$DATA"
-  launchctl bootout "gui/$UID_/$CONTAINER" 2>/dev/null || true
   OUT="$AGENTS/$CONTAINER.plist"
+  INSTANCE=""
+  if [[ -n "${WECHAT_CONTAINER+set}" ]]; then
+    INSTANCE="$WECHAT_CONTAINER"
+  elif [[ -f "$OUT" ]]; then
+    INSTANCE="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:WECHAT_CONTAINER' "$OUT" 2>/dev/null || true)"
+  fi
+  [[ -z "$INSTANCE" || "$INSTANCE" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { echo "ERROR: bad container name: $INSTANCE" >&2; exit 1; }
+  launchctl bootout "gui/$UID_/$CONTAINER" 2>/dev/null || true
   sed -e "s|{{PYTHON}}|$PY|g" -e "s|{{SCRIPT}}|$HERE/container_snapshot.py|g" -e "s|{{LOG}}|$LOG|g" \
+      -e "s|{{INSTANCE}}|$INSTANCE|g" \
       "$HERE/launchd/$CONTAINER.plist.template" > "$OUT"
   plutil -lint "$OUT" >/dev/null
   launchctl bootstrap "gui/$UID_" "$OUT"
-  echo "Installed $CONTAINER. Log: $LOG"
+  echo "Installed $CONTAINER, reading ${INSTANCE:-the only running WeChat container}. Log: $LOG"
   echo "Test: launchctl kickstart -k gui/$UID_/$CONTAINER; tail -3 $LOG"
   exit 0
 fi

@@ -130,11 +130,15 @@ python3 container_snapshot.py snapshot --print           # one capture of the co
 python3 container_snapshot.py read --chats "A,B" --print # open these chats and read back --days (default 2)
 python3 container_snapshot.py read                       # the chats in ~/.wechat-export/ocr/allowlist.txt
 ./install_launchd.sh --container                         # snapshot every 15 min (label dev.mingz.wechat-ocr.container)
+WECHAT_CONTAINER=woc-wx-xxxx ./install_launchd.sh --container  # same, pinned to one instance
 ```
 
 - Capture is `docker exec <instance> xwd -root`, decoded to PNG in Python (the image's ffmpeg 5.1 can't read
   xwd from a pipe). The instance is `--instance`, `$WECHAT_CONTAINER`, or the one running `wechat-on-cloud`
-  container. No Screen Recording or Accessibility grant: nothing on the Mac's own screen is touched.
+  container. With two WeChat instances running and no pin, every run logs an error and nothing is captured,
+  so a host that runs more than one pins the scheduled capture with `WECHAT_CONTAINER` at install; a
+  reinstall keeps the pin already in the plist. No Screen Recording or Accessibility grant: nothing on the
+  Mac's own screen is touched.
 - The Linux client is laid out differently (list 60-300 px, pane from 300, title bar 33-80, input box 142 px
   high) and shows stamps in Chinese ("昨天21:31"). Every OCR box is mapped onto the Mac layout and every stamp
   into the Mac's English form ("Yesterday 21:31") before `wechat_ocr`'s parser runs, so the store, the
