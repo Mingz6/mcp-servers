@@ -55,6 +55,6 @@ jobs:
       - name: imessage tests
         working-directory: packages/imessage
         run: python -m unittest test_mcp_server -v
-      - name: wechat OCR tests
+      - name: wechat OCR and scheduled-capture tests
         working-directory: packages/wechat
-        run: python -m unittest test_wechat_ocr -v
+        run: python -m unittest test_wechat_ocr test_wechat_scheduled test_container_snapshot -v

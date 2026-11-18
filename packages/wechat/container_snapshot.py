@@ -146,12 +146,12 @@ def en_text(text: str) -> str:
     return text
 
 
-def map_box(l: dict) -> dict:
-    x0, x1 = map_x(l["x"]), map_x(l["x"] + l["w"])
-    y0, y1 = map_y(l["y"]), map_y(l["y"] + l["h"])
-    out = {**l, "x": round(x0), "y": round(y0), "w": round(x1 - x0), "h": round(y1 - y0)}
-    if "text" in l:
-        out["text"] = en_text(l["text"])
+def map_box(b: dict) -> dict:
+    x0, x1 = map_x(b["x"]), map_x(b["x"] + b["w"])
+    y0, y1 = map_y(b["y"]), map_y(b["y"] + b["h"])
+    out = {**b, "x": round(x0), "y": round(y0), "w": round(x1 - x0), "h": round(y1 - y0)}
+    if "text" in b:
+        out["text"] = en_text(b["text"])
     return out
 
 
@@ -271,11 +271,11 @@ def _ocr(helper: str, png: Path, *args: str) -> dict:
     return json.loads(w._run([helper, "ocr", str(png), *args]))
 
 
-def junk(l: dict) -> bool:
+def junk(b: dict) -> bool:
     """Boxes that are never text a person wrote: window buttons above the title bar, an incoming avatar."""
-    if l["y"] + l["h"] / 2 < L_TITLE_TOP:
+    if b["y"] + b["h"] / 2 < L_TITLE_TOP:
         return True
-    return l["y"] >= L_BODY_TOP and L_IN_AVATAR[0] <= l["x"] and l["x"] + l["w"] <= L_IN_AVATAR[1]
+    return b["y"] >= L_BODY_TOP and L_IN_AVATAR[0] <= b["x"] and b["x"] + b["w"] <= L_IN_AVATAR[1]
 
 
 def ocr_window(helper: str, png: Path, W: int, H: int, chat_only: bool = False) -> tuple[dict, list[dict], list[dict]]:
@@ -283,22 +283,22 @@ def ocr_window(helper: str, png: Path, W: int, H: int, chat_only: bool = False) 
     (ocr, chat-list lines, timestamp lines) build_snapshot() takes."""
     full = _ocr(helper, png, "--scale", SCALE, "--rows", f"{L_PANE},{W - w.SCROLLBAR}")
     Wm, Hm = mac_size(W, H)
-    lines = [map_box(l) for l in full["lines"] if not junk(l)]
+    lines = [map_box(b) for b in full["lines"] if not junk(b)]
     if not w._title_lines(lines, 1.0, Wm):  # Vision drops a title followed by several emoji; alone in a crop it reads it
         band = _crop(L_PANE, L_TITLE_TOP, W - L_PANE - w.TITLE_ICONS, L_BODY_TOP - L_TITLE_TOP, W, H)
-        lines += [map_box(l) for l in _ocr(helper, png, "--crop", band, "--scale", SCALE)["lines"]]
+        lines += [map_box(b) for b in _ocr(helper, png, "--crop", band, "--scale", SCALE)["lines"]]
     side: list[dict] = []
     if not chat_only:
         crop = _crop(L_LIST, L_TITLE_TOP, L_PANE - L_LIST, H - L_TITLE_TOP, W, H)
-        side = [map_box(l) for l in _ocr(helper, png, "--crop", crop, "--scale", SCALE)["lines"]]
+        side = [map_box(b) for b in _ocr(helper, png, "--crop", crop, "--scale", SCALE)["lines"]]
         for band in w.orphan_time_bands(side, 1.0):
             x, y, bw, bh = (float(v) for v in band.split(","))
             lx, ly = unmap_x(x), unmap_y(y)
             crop = _crop(lx, ly, unmap_x(x + bw) - lx, unmap_y(y + bh) - ly, W, H)
-            side += [map_box(l) for l in _ocr(helper, png, "--crop", crop, "--scale", "3")["lines"]]
+            side += [map_box(b) for b in _ocr(helper, png, "--crop", crop, "--scale", "3")["lines"]]
     cx = (L_PANE + W) / 2
     crop = _crop(cx - 100, L_BODY_TOP, 200, H - L_INPUT_H - L_BODY_TOP, W, H)
-    stamps = [map_box(l) for l in _ocr(helper, png, "--crop", crop, "--scale", "3")["lines"]]
+    stamps = [map_box(b) for b in _ocr(helper, png, "--crop", crop, "--scale", "3")["lines"]]
     if len(full["lines"]) < 5:
         raise w.OcrError("Window captured but almost no text found: WeChat in the container is loading or blank")
     ocr = {"w": Wm, "h": Hm, "paper": full.get("paper"), "lines": lines,
