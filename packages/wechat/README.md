@@ -12,6 +12,8 @@ and run a **read-only** MCP server for live chat queries.
 | `mcp_server.py` | MCP server — live chat queries, contact search, voice transcription (read-only) |
 | `wechat_ocr.py` + `wxvision.swift` | Reads WeChat from the screen with Apple Vision OCR. No keys, no re-sign. The working path on WeChat 4.1.15 |
 | `test_wechat_ocr.py` | Unit tests for the OCR parsers (synthetic lines): `python3 -m unittest test_wechat_ocr -v` |
+| `wechat_scheduled.py`, `install_launchd.sh`, `launchd/` | Scheduled capture through launchd (see "Running it on a schedule"). Tests: `python3 -m unittest test_wechat_scheduled -v` |
+| `container_snapshot.py` | The same OCR reader for WeChat for Linux in a [WechatOnCloud](https://github.com/Gloridust/WechatOnCloud) container (see "WeChat in a container"). Tests: `python3 -m unittest test_container_snapshot -v` |
 
 ## Reading WeChat by screenshot + OCR (works on 4.1.15, no keys)
 
@@ -90,6 +92,68 @@ python3 wechat_ocr.py --json     # same, as JSON
 - Parser rules worth knowing: text starting right of x=420 pt is an outgoing bubble (`me`); in a 1:1 chat
   (title without a `(N)` member count) text left of x=321 pt is image content and is ignored; the window
   is usually 2x Retina, so all layout constants are in points and scaled by `ocr_width / window_width`.
+
+
+### Running it on a schedule (launchd)
+
+`wechat_scheduled.py snapshot` is one capture that never clicks, so it never marks a chat as read.
+`wechat_scheduled.py auto-read` opens only the chats named in `~/.wechat-export/ocr/allowlist.txt` (one name
+per line, `#` for comments) and only after 120 s without keyboard or mouse input; an empty list reads nothing.
+Both print one log line and exit 0 when there is nothing to do: WeChat not running, no window (closed to the
+menu bar), login screen, locked screen, Mac busy, previous run still going. They exit 1 only for a real
+failure. Logs hold counts and reasons, never chat names or text.
+
+```bash
+./install_launchd.sh                # launcher app + snapshot every 15 min
+./install_launchd.sh --auto-read    # also the allowlist auto-read at 10:00 and 20:00 (HOUR_1, HOUR_2)
+./install_launchd.sh --uninstall    # boot out both agents, remove the app and the plists
+```
+
+- **Why a small app:** macOS ties Screen Recording and Accessibility to a program. The installer builds
+  `~/Applications/WeChatOCR.app` (a Swift launcher with the python and script paths compiled in, two
+  accepted modes) and the agents run that, so the grant covers one app and not every `python3`. It starts
+  Python as a child process; an `exec` would hand the grant check back to `python3`.
+- **Grants (by hand):** System Settings, Privacy & Security, Screen Recording, add `WeChatOCR`; add
+  Accessibility too for auto-read. The app is ad-hoc signed, so a rebuild (re-running the installer) asks again.
+- **Log:** `~/.wechat-export/ocr/launchd.log`. Test now: `launchctl kickstart -k gui/$(id -u)/dev.mingz.wechat-ocr.snapshot`.
+- **Side effects:** snapshot marks nothing read. Auto-read marks the allowlisted chats read on the phone.
+  Never put `--top N` on a schedule: it opens whatever is on top, including groups you have not read.
+- Needs the Mac logged in (a LaunchAgent has no screen at the login window) and WeChat's window open; with
+  the lid closed, or WeChat closed to the menu bar, runs skip.
+
+### WeChat in a container (WechatOnCloud)
+
+WechatOnCloud runs the official WeChat for Linux on an Xvnc display inside Docker, with a web panel to log in.
+Its database is encrypted the same way (a key scan inside the container found 0 keys on 2026-11-06), so this
+reads the container's screen instead, on the Mac that runs Docker (it needs Apple Vision):
+
+```bash
+python3 container_snapshot.py snapshot --print           # one capture of the container, never clicks
+python3 container_snapshot.py read --chats "A,B" --print # open these chats and read back --days (default 2)
+python3 container_snapshot.py read                       # the chats in ~/.wechat-export/ocr/allowlist.txt
+./install_launchd.sh --container                         # snapshot every 15 min (label dev.mingz.wechat-ocr.container)
+WECHAT_CONTAINER=woc-wx-xxxx ./install_launchd.sh --container  # same, pinned to one instance
+```
+
+- Capture is `docker exec <instance> xwd -root`, decoded to PNG in Python (the image's ffmpeg 5.1 can't read
+  xwd from a pipe). The instance is `--instance`, `$WECHAT_CONTAINER`, or the one running `wechat-on-cloud`
+  container. With two WeChat instances running and no pin, every run logs an error and nothing is captured,
+  so a host that runs more than one pins the scheduled capture with `WECHAT_CONTAINER` at install; a
+  reinstall keeps the pin already in the plist. No Screen Recording or Accessibility grant: nothing on the
+  Mac's own screen is touched.
+- The Linux client is laid out differently (list 60-300 px, pane from 300, title bar 33-80, input box 142 px
+  high) and shows stamps in Chinese ("昨天21:31"). Every OCR box is mapped onto the Mac layout and every stamp
+  into the Mac's English form ("Yesterday 21:31") before `wechat_ocr`'s parser runs, so the store, the
+  transcripts and the merge are shared with the Mac path. The display is 1x, so every OCR pass runs at 2x.
+- `read` clicks and scrolls with xdotool on the container's own display, so there is no idle gate; someone
+  moving the pointer in the web panel still stops it. It marks the opened chats read on the phone, like
+  `--auto-read`. Never put `--top N` on a schedule.
+- Skips (exit 0, one log line): no container running, no WeChat window, logged out (the login window is
+  showing: log in again from the panel; a host reboot does this too), a blank window, previous run still going, empty allowlist.
+- Seen live (2026-11-06): a new message shows in the next capture; an unread badge is found but not its number
+  (Vision can't read the white digit on red), so `unread` is 1 for any count, as on the Mac when the preview has
+  no `[N]`; an emoji-only message has no text to read and is left out; the xdotool wheel scrolls the pane.
+  Not yet seen: group chats (sender labels are assumed at the bubble edge, x~371).
 
 ## When to Run
 
