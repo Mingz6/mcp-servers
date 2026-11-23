@@ -400,9 +400,12 @@ export async function sendMessage(
 
 // A blank line is <p>&nbsp;</p>, the way the Teams client writes one. A <br> between paragraphs
 // showed as two blank lines, and the body's final newline as an empty line under every message (2026-10-16).
+// Only between two paragraphs, though: a list carries its own top and bottom margin, so the client writes
+// <p>x</p><ul>, and a spacer there showed as two blank lines above and below the list (outbox #519, 2026-11-23).
 export function markdownToHtml(md: string): string {
   const html: string[] = [];
   let list: "ul" | "ol" | null = null;
+  let last: "p" | "list" | null = null;
   let gap = false;
 
   const closeList = () => {
@@ -416,11 +419,6 @@ export function markdownToHtml(md: string): string {
       gap = html.length > 0;
       continue;
     }
-    if (gap) {
-      html.push("<p>&nbsp;</p>");
-      gap = false;
-    }
-
     const line = escapeHtml(raw)
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
       .replace(/__(.+?)__/g, "<strong>$1</strong>")
@@ -432,6 +430,9 @@ export function markdownToHtml(md: string): string {
     const olMatch = line.match(/^\s*\d+\.\s+(.+)$/);
     const tag = ulMatch ? "ul" : olMatch ? "ol" : null;
 
+    if (gap && !tag && last === "p") html.push("<p>&nbsp;</p>");
+    gap = false;
+
     if (tag) {
       if (list !== tag) {
         closeList();
@@ -439,9 +440,11 @@ export function markdownToHtml(md: string): string {
         list = tag;
       }
       html.push(`<li>${(ulMatch ?? olMatch)![1]}</li>`);
+      last = "list";
     } else {
       closeList();
       html.push(`<p>${line}</p>`);
+      last = "p";
     }
   }
 
